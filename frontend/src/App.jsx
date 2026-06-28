@@ -9,6 +9,35 @@ const API = "http://localhost:5174"
 
 const STAGES = ["Configure", "Scan", "Review", "Rename"]
 
+// Browser-local persistence so the TMDB API key (and other prefs) are
+// remembered for subsequent operations even before/without the backend.
+const STORAGE_KEY = "plexmatch.settings"
+
+const DEFAULT_SETTINGS = {
+  tmdb_api_key: "",
+  root_folder: "K:\\Documentaries",
+  auto_pick_top: true,
+  restructure_folders: true,
+  clean_empty_folders: false,
+}
+
+function readCachedSettings() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    return raw ? JSON.parse(raw) : null
+  } catch {
+    return null
+  }
+}
+
+function writeCachedSettings(data) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
+  } catch {
+    // ignore quota / privacy-mode errors
+  }
+}
+
 export default function App() {
   const [stage, setStage] = useState(0) // 0=configure 1=scan 2=review 3=done
   const [settings, setSettings] = useState(null)
@@ -23,26 +52,40 @@ export default function App() {
   const [undoing, setUndoing] = useState(false)
   const [resultNote, setResultNote] = useState(null)
 
-  // Load persisted settings on mount
+  // Load persisted settings on mount: hydrate instantly from localStorage,
+  // then reconcile with the backend's settings.json (the source of truth).
   useEffect(() => {
+    const cached = readCachedSettings()
+    if (cached) setSettings({ ...DEFAULT_SETTINGS, ...cached })
+
     fetch(`${API}/api/settings`)
       .then(r => r.json())
-      .then(s => setSettings(s))
-      .catch(() => setSettings({
-        tmdb_api_key: "",
-        root_folder: "K:\\Documentaries",
-        auto_pick_top: true,
-        restructure_folders: true,
-      }))
+      .then(s => {
+        const merged = { ...DEFAULT_SETTINGS, ...s }
+        // Keep a locally-stored key if the backend somehow has none
+        if (!merged.tmdb_api_key && cached?.tmdb_api_key) {
+          merged.tmdb_api_key = cached.tmdb_api_key
+        }
+        setSettings(merged)
+        writeCachedSettings(merged)
+      })
+      .catch(() => {
+        if (!cached) setSettings({ ...DEFAULT_SETTINGS })
+      })
   }, [])
 
   const saveSettings = useCallback(async (updated) => {
     setSettings(updated)
-    await fetch(`${API}/api/settings`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(updated),
-    })
+    writeCachedSettings(updated)
+    try {
+      await fetch(`${API}/api/settings`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(updated),
+      })
+    } catch {
+      // backend unavailable: settings are still cached locally
+    }
   }, [])
 
   const handleScan = useCallback(async (rootOverride) => {
