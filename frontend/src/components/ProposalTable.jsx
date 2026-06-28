@@ -85,12 +85,18 @@ function ProposalRow({ proposal, index, onChange, root, apiKey }) {
 
   const isUnmatched = !proposal.matched || proposal.status === "unmatched"
   const isError = proposal.status === "error"
+  const isOrganised = proposal.status === "organised"
 
   return (
     <>
-      <tr className={`proposal-row ${proposal.approved ? "row-approved" : "row-rejected"} ${isUnmatched ? "row-unmatched" : ""}`}>
+      <tr className={`proposal-row ${isOrganised ? "row-organised" : proposal.approved ? "row-approved" : "row-rejected"} ${isUnmatched ? "row-unmatched" : ""}`}>
         <td className="col-approve">
-          {!isUnmatched && !isError && (
+          {isOrganised && (
+            <span className="organised-icon" title="Already in Plex format - no rename needed">
+              <svg viewBox="0 0 14 14" fill="none"><path d="M2 7l4 4 6-6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+            </span>
+          )}
+          {!isOrganised && !isUnmatched && !isError && (
             <button
               className={`approve-btn ${proposal.approved ? "approved" : "rejected"}`}
               onClick={toggle}
@@ -102,7 +108,7 @@ function ProposalRow({ proposal, index, onChange, root, apiKey }) {
               }
             </button>
           )}
-          {(isUnmatched || isError) && (
+          {!isOrganised && (isUnmatched || isError) && (
             <span className="unmatched-icon" title="No TMDB match found">?</span>
           )}
         </td>
@@ -120,6 +126,7 @@ function ProposalRow({ proposal, index, onChange, root, apiKey }) {
             <span className="error-label">{proposal.error}</span>
           ) : (
             <div className="proposed-names">
+              {isOrganised && <span className="organised-label">Already organised</span>}
               <span className="proposed-folder">{proposal.proposed_folder}/</span>
               <span className="proposed-file">{proposal.proposed_filename}</span>
             </div>

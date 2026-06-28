@@ -467,14 +467,22 @@ def build_proposal(f: dict, root: str, api_key: str) -> dict:
         return {**f, "parsed": parsed, **match, "status": "unmatched"}
 
     plex_names = build_plex_names(match, f["ext"])
+    proposed_full_path = os.path.join(root, plex_names["folder"], plex_names["filename"])
+
+    # If the file is already exactly where it should be, it's organised already.
+    def _norm(p):
+        return os.path.normcase(os.path.normpath(p))
+    already_organised = _norm(proposed_full_path) == _norm(f["full_path"])
+
     return {
         **f,
         "parsed": parsed,
         **match,
         "proposed_folder": plex_names["folder"],
         "proposed_filename": plex_names["filename"],
-        "proposed_full_path": os.path.join(root, plex_names["folder"], plex_names["filename"]),
-        "status": "pending",  # pending | approved | rejected | done | error
+        "proposed_full_path": proposed_full_path,
+        # organised = already in the correct Plex location (no rename needed)
+        "status": "organised" if already_organised else "pending",
     }
 
 

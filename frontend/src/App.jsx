@@ -238,6 +238,7 @@ export default function App() {
   const approvedCount = proposals.filter(p => p.approved && p.status === "pending").length
   const matchedCount = proposals.filter(p => p.matched).length
   const unmatchedCount = proposals.filter(p => !p.matched).length
+  const organisedCount = proposals.filter(p => p.status === "organised").length
 
   if (!settings) {
     return (
@@ -410,6 +411,12 @@ export default function App() {
             <span><strong className="text-green">{matchedCount}</strong> matched</span>
             <span className="stat-dot" />
             <span><strong className="text-amber">{unmatchedCount}</strong> unmatched</span>
+            {organisedCount > 0 && (
+              <>
+                <span className="stat-dot" />
+                <span><strong className="text-green">{organisedCount}</strong> already organised</span>
+              </>
+            )}
             <span className="stat-dot" />
             <span><strong>{approvedCount}</strong> approved for rename</span>
           </div>

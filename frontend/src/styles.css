@@ -685,6 +685,32 @@ html, body, #root {
   margin: auto;
 }
 
+.organised-icon {
+  display: flex;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1.5px solid var(--green);
+  background: var(--green-dim);
+  color: var(--green);
+  align-items: center;
+  justify-content: center;
+  margin: auto;
+}
+.organised-icon svg { width: 12px; height: 12px; }
+
+.organised-label {
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--green);
+}
+
+/* Already-organised rows: clearly "done", not dimmed like rejected ones */
+.row-organised td { opacity: 0.85; }
+.row-organised td:first-child { opacity: 1; }
+
 /* Confidence */
 .confidence {
   display: flex;
