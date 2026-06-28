@@ -7,10 +7,11 @@ proposes Plex-compliant renames, and executes approved ones.
 
 import os
 import re
+import sys
 import json
-import string
 import shutil
 import requests
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from flask import Flask, request, jsonify, Response, stream_with_context
@@ -726,61 +727,58 @@ def undo():
     })
 
 
-def list_drives() -> list:
-    """Available filesystem roots. Drive letters on Windows, '/' elsewhere."""
-    if os.name == "nt":
-        drives = []
-        for letter in string.ascii_uppercase:
-            root = f"{letter}:\\"
-            if os.path.exists(root):
-                drives.append(root)
-        return drives
-    return ["/"]
+# Runs in a separate process so the GUI event loop never touches the Flask
+# server thread (tkinter is not thread-safe). Prints the chosen path (or an
+# empty line if cancelled) to stdout.
+_PICKER_CODE = r"""
+import sys
+import tkinter as tk
+from tkinter import filedialog
+
+initial = sys.argv[1] if len(sys.argv) > 1 else ""
+root = tk.Tk()
+root.withdraw()
+root.attributes("-topmost", True)
+kwargs = {"title": "Select documentaries folder"}
+import os
+if initial and os.path.isdir(initial):
+    kwargs["initialdir"] = initial
+path = filedialog.askdirectory(**kwargs)
+root.destroy()
+sys.stdout.write(path or "")
+"""
 
 
-@app.route("/api/browse", methods=["POST"])
-def browse():
-    """
-    List subfolders of a path so the UI can navigate the filesystem.
-    With an empty path, returns the list of drives/roots only.
-    """
+@app.route("/api/pick-folder", methods=["POST"])
+def pick_folder():
+    """Open the native OS folder-picker dialog and return the chosen path."""
     data = request.json or {}
-    path = (data.get("path") or "").strip()
-    drives = list_drives()
+    initial = (data.get("initial") or "").strip()
 
-    if not path:
-        return jsonify({"path": "", "parent": None, "folders": [], "drives": drives})
-
-    if not os.path.isdir(path):
-        return jsonify({"error": f"Not a folder: {path}"}), 400
+    run_kwargs = {"capture_output": True, "text": True, "timeout": 600}
+    if os.name == "nt":
+        # Avoid a console window flashing when spawning python.exe
+        run_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
 
     try:
-        folders = []
-        for name in os.listdir(path):
-            full = os.path.join(path, name)
-            try:
-                if os.path.isdir(full):
-                    folders.append(name)
-            except OSError:
-                pass
-        folders.sort(key=str.lower)
-    except PermissionError:
-        return jsonify({"error": "Permission denied for that folder"}), 403
-    except OSError as e:
-        return jsonify({"error": str(e)}), 400
+        result = subprocess.run(
+            [sys.executable, "-c", _PICKER_CODE, initial],
+            **run_kwargs,
+        )
+    except Exception as e:
+        return jsonify({"error": f"Could not open folder dialog: {e}"}), 500
 
-    abspath = os.path.abspath(path)
-    parent = os.path.dirname(abspath)
-    # At a drive/root, dirname returns the path itself -> signal "go to drive list"
-    if parent == abspath:
-        parent = ""
+    path = (result.stdout or "").strip()
 
-    return jsonify({
-        "path": abspath,
-        "parent": parent,
-        "folders": folders,
-        "drives": drives,
-    })
+    if result.returncode != 0 and not path:
+        return jsonify({
+            "error": (result.stderr or "").strip() or "Folder dialog failed to open",
+        }), 500
+
+    if path:
+        path = os.path.normpath(path)  # askdirectory returns forward slashes on Windows
+
+    return jsonify({"path": path, "cancelled": path == ""})
 
 
 @app.route("/api/validate-folder", methods=["POST"])

@@ -15,7 +15,7 @@ const STORAGE_KEY = "plexmatch.settings"
 
 const DEFAULT_SETTINGS = {
   tmdb_api_key: "",
-  root_folder: "K:\\Documentaries",
+  root_folder: "",
   auto_pick_top: true,
   restructure_folders: true,
   clean_empty_folders: false,

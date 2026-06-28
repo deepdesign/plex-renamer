@@ -103,4 +103,5 @@ Documentaries/
 | POST   | `/api/rename`         | Execute approved moves; logs the batch, optional folder cleanup|
 | GET    | `/api/rename-log`     | List logged rename batches (most recent first)                 |
 | POST   | `/api/undo`           | Reverse a rename batch (defaults to the most recent)           |
+| POST   | `/api/pick-folder`    | Open the native OS folder picker and return the chosen path    |
 | POST   | `/api/validate-folder`| Check whether a path exists on disk                            |

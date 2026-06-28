@@ -1,5 +1,4 @@
 import { useState } from "react"
-import FolderBrowser from "./FolderBrowser"
 
 const API = "http://localhost:5174"
 
@@ -7,7 +6,8 @@ export default function Settings({ settings, onChange, onScan, scanning, stage }
   const [folderValid, setFolderValid] = useState(null)
   const [validating, setValidating] = useState(false)
   const [localFolder, setLocalFolder] = useState(settings.root_folder || "")
-  const [browsing, setBrowsing] = useState(false)
+  const [picking, setPicking] = useState(false)
+  const [pickError, setPickError] = useState(null)
 
   const update = (key, value) => {
     onChange({ ...settings, [key]: value })
@@ -32,12 +32,26 @@ export default function Settings({ settings, onChange, onScan, scanning, stage }
     }
   }
 
-  const selectFolder = (path) => {
-    setBrowsing(false)
-    if (!path) return
-    setLocalFolder(path)
-    setFolderValid(true)
-    update("root_folder", path)
+  const pickFolder = async () => {
+    setPicking(true)
+    setPickError(null)
+    try {
+      const res = await fetch(`${API}/api/pick-folder`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ initial: localFolder }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || "Could not open folder picker")
+      if (data.cancelled || !data.path) return // user cancelled the dialog
+      setLocalFolder(data.path)
+      setFolderValid(true)
+      update("root_folder", data.path)
+    } catch (e) {
+      setPickError(e.message)
+    } finally {
+      setPicking(false)
+    }
   }
 
   const canScan = settings.tmdb_api_key && settings.root_folder && folderValid !== false
@@ -71,7 +85,7 @@ export default function Settings({ settings, onChange, onScan, scanning, stage }
           <input
             type="text"
             className={`field-input ${folderValid === false ? "field-input--error" : folderValid === true ? "field-input--ok" : ""}`}
-            placeholder="K:\Documentaries"
+            placeholder="Click Browse to choose a folder"
             value={localFolder}
             onChange={e => {
               setLocalFolder(e.target.value)
@@ -91,17 +105,27 @@ export default function Settings({ settings, onChange, onScan, scanning, stage }
             </svg>
           )}
         </div>
-        <button className="btn-secondary btn-browse" onClick={() => setBrowsing(true)}>
-          <svg viewBox="0 0 16 16" fill="none">
-            <path d="M2 4.5A1.5 1.5 0 013.5 3h3l1.5 1.5h4.5A1.5 1.5 0 0114 6v6a1.5 1.5 0 01-1.5 1.5h-9A1.5 1.5 0 012 12V4.5z" stroke="currentColor" strokeWidth="1.2"/>
-          </svg>
-          Browse...
+        <button className="btn-secondary btn-browse" onClick={pickFolder} disabled={picking}>
+          {picking ? (
+            <>
+              <div className="spinner-sm" />
+              Waiting for dialog...
+            </>
+          ) : (
+            <>
+              <svg viewBox="0 0 16 16" fill="none">
+                <path d="M2 4.5A1.5 1.5 0 013.5 3h3l1.5 1.5h4.5A1.5 1.5 0 0114 6v6a1.5 1.5 0 01-1.5 1.5h-9A1.5 1.5 0 012 12V4.5z" stroke="currentColor" strokeWidth="1.2"/>
+              </svg>
+              Browse...
+            </>
+          )}
         </button>
+        {pickError && <span className="field-error">{pickError}</span>}
         {folderValid === false && (
           <span className="field-error">Folder not found. Check the path is accessible from this machine.</span>
         )}
-        {folderValid === null && (
-          <span className="field-hint">Tab out of the field to validate, or click Browse</span>
+        {folderValid === null && !pickError && (
+          <span className="field-hint">Type a path, or click Browse to pick a folder</span>
         )}
       </div>
 
@@ -171,14 +195,6 @@ export default function Settings({ settings, onChange, onScan, scanning, stage }
 
       {!settings.tmdb_api_key && (
         <p className="settings-warn">Enter a TMDB API key to scan.</p>
-      )}
-
-      {browsing && (
-        <FolderBrowser
-          initialPath={localFolder}
-          onSelect={selectFolder}
-          onClose={() => setBrowsing(false)}
-        />
       )}
     </div>
   )
