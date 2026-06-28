@@ -58,20 +58,37 @@ export default function App() {
     const cached = readCachedSettings()
     if (cached) setSettings({ ...DEFAULT_SETTINGS, ...cached })
 
-    fetch(`${API}/api/settings`)
-      .then(r => r.json())
-      .then(s => {
+    const load = async () => {
+      try {
+        const res = await fetch(`${API}/api/settings`)
+        const s = await res.json()
         const merged = { ...DEFAULT_SETTINGS, ...s }
         // Keep a locally-stored key if the backend somehow has none
         if (!merged.tmdb_api_key && cached?.tmdb_api_key) {
           merged.tmdb_api_key = cached.tmdb_api_key
         }
+        // Self-heal: drop a stored library folder that no longer exists on disk
+        if (merged.root_folder) {
+          try {
+            const v = await fetch(`${API}/api/validate-folder`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ path: merged.root_folder }),
+            })
+            const vd = await v.json()
+            if (v.ok && vd.exists === false) merged.root_folder = ""
+          } catch {
+            // backend unreachable for validation: leave the value as-is
+          }
+        }
         setSettings(merged)
         writeCachedSettings(merged)
-      })
-      .catch(() => {
+      } catch {
         if (!cached) setSettings({ ...DEFAULT_SETTINGS })
-      })
+      }
+    }
+
+    load()
   }, [])
 
   const saveSettings = useCallback(async (updated) => {

@@ -1,9 +1,9 @@
 @echo off
 echo Starting PlexMatch...
 
-:: Start Flask backend
+:: Start Flask backend (installs Python deps first so it can't fail silently)
 echo [1/2] Starting backend (port 5174)...
-start "PlexMatch Backend" cmd /k "cd /d %~dp0backend && python app.py"
+start "PlexMatch Backend" cmd /k "cd /d %~dp0backend && python -m pip install -q -r requirements.txt && python app.py"
 
 :: Wait a moment for backend to boot
 timeout /t 2 /nobreak > nul

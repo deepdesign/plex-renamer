@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useState, useEffect } from "react"
 
 const API = "http://localhost:5174"
 
@@ -8,6 +8,11 @@ export default function Settings({ settings, onChange, onScan, scanning, stage }
   const [localFolder, setLocalFolder] = useState(settings.root_folder || "")
   const [picking, setPicking] = useState(false)
   const [pickError, setPickError] = useState(null)
+
+  // Keep the input in sync when the stored folder changes (load, self-heal, pick)
+  useEffect(() => {
+    setLocalFolder(settings.root_folder || "")
+  }, [settings.root_folder])
 
   const update = (key, value) => {
     onChange({ ...settings, [key]: value })
