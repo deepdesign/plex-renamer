@@ -8,6 +8,7 @@ proposes Plex-compliant renames, and executes approved ones.
 import os
 import re
 import json
+import string
 import shutil
 import requests
 from datetime import datetime
@@ -722,6 +723,63 @@ def undo():
         "results": results,
         "removed_folders": removed_folders,
         "batch_id": batch["batch_id"],
+    })
+
+
+def list_drives() -> list:
+    """Available filesystem roots. Drive letters on Windows, '/' elsewhere."""
+    if os.name == "nt":
+        drives = []
+        for letter in string.ascii_uppercase:
+            root = f"{letter}:\\"
+            if os.path.exists(root):
+                drives.append(root)
+        return drives
+    return ["/"]
+
+
+@app.route("/api/browse", methods=["POST"])
+def browse():
+    """
+    List subfolders of a path so the UI can navigate the filesystem.
+    With an empty path, returns the list of drives/roots only.
+    """
+    data = request.json or {}
+    path = (data.get("path") or "").strip()
+    drives = list_drives()
+
+    if not path:
+        return jsonify({"path": "", "parent": None, "folders": [], "drives": drives})
+
+    if not os.path.isdir(path):
+        return jsonify({"error": f"Not a folder: {path}"}), 400
+
+    try:
+        folders = []
+        for name in os.listdir(path):
+            full = os.path.join(path, name)
+            try:
+                if os.path.isdir(full):
+                    folders.append(name)
+            except OSError:
+                pass
+        folders.sort(key=str.lower)
+    except PermissionError:
+        return jsonify({"error": "Permission denied for that folder"}), 403
+    except OSError as e:
+        return jsonify({"error": str(e)}), 400
+
+    abspath = os.path.abspath(path)
+    parent = os.path.dirname(abspath)
+    # At a drive/root, dirname returns the path itself -> signal "go to drive list"
+    if parent == abspath:
+        parent = ""
+
+    return jsonify({
+        "path": abspath,
+        "parent": parent,
+        "folders": folders,
+        "drives": drives,
     })
 
 
