@@ -19,7 +19,12 @@ const DEFAULT_SETTINGS = {
   auto_pick_top: true,
   restructure_folders: true,
   clean_empty_folders: false,
+  clean_unmatched: true,
+  web_lookup: true,
 }
+
+// Statuses the user can approve and rename
+const APPROVABLE = new Set(["pending", "cleanup"])
 
 function readCachedSettings() {
   try {
@@ -123,6 +128,8 @@ export default function App() {
         body: JSON.stringify({
           root_folder: root,
           tmdb_api_key: settings.tmdb_api_key,
+          clean_unmatched: settings.clean_unmatched,
+          web_lookup: settings.web_lookup,
         }),
       })
 
@@ -177,7 +184,7 @@ export default function App() {
 
   const handleRename = useCallback(async () => {
     const approved = proposals
-      .filter(p => p.approved && p.status === "pending")
+      .filter(p => p.approved && APPROVABLE.has(p.status))
       .map(p => ({
         full_path: p.full_path,
         proposed_full_path: p.proposed_full_path,
@@ -235,10 +242,12 @@ export default function App() {
     }
   }, [lastBatch])
 
-  const approvedCount = proposals.filter(p => p.approved && p.status === "pending").length
+  const approvedCount = proposals.filter(p => p.approved && APPROVABLE.has(p.status)).length
   const matchedCount = proposals.filter(p => p.matched).length
-  const unmatchedCount = proposals.filter(p => !p.matched).length
+  const cleanupCount = proposals.filter(p => p.status === "cleanup").length
+  const unmatchedCount = proposals.filter(p => !p.matched && p.status !== "cleanup").length
   const organisedCount = proposals.filter(p => p.status === "organised").length
+  const conflictCount = proposals.filter(p => p.status === "conflict").length
 
   if (!settings) {
     return (
@@ -411,10 +420,22 @@ export default function App() {
             <span><strong className="text-green">{matchedCount}</strong> matched</span>
             <span className="stat-dot" />
             <span><strong className="text-amber">{unmatchedCount}</strong> unmatched</span>
+            {cleanupCount > 0 && (
+              <>
+                <span className="stat-dot" />
+                <span><strong className="text-blue">{cleanupCount}</strong> name cleanup</span>
+              </>
+            )}
             {organisedCount > 0 && (
               <>
                 <span className="stat-dot" />
                 <span><strong className="text-green">{organisedCount}</strong> already organised</span>
+              </>
+            )}
+            {conflictCount > 0 && (
+              <>
+                <span className="stat-dot" />
+                <span><strong className="text-amber">{conflictCount}</strong> conflicts</span>
               </>
             )}
             <span className="stat-dot" />

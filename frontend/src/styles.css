@@ -727,6 +727,71 @@ html, body, #root {
 
 /* Already-organised rows: clearly "done", not dimmed like rejected ones */
 .row-organised td { opacity: 0.85; }
+
+.conflict-icon {
+  display: flex;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1.5px solid var(--amber);
+  background: var(--amber-dim);
+  color: var(--amber);
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 13px;
+  margin: auto;
+}
+
+.conflict-label {
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--amber);
+}
+
+.cleanup-label {
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--blue);
+}
+
+.local-badge,
+.web-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  border-radius: var(--radius-sm);
+  padding: 2px 7px;
+}
+
+.local-badge {
+  color: var(--text-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border-2);
+}
+
+.web-badge {
+  color: var(--blue);
+  background: rgba(96, 165, 250, 0.12);
+  border: 1px solid rgba(96, 165, 250, 0.4);
+}
+
+.row-conflict { background: rgba(245, 166, 35, 0.04); }
+
+.conflict-resolve {
+  padding-bottom: 10px;
+  margin-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+.conflict-help {
+  font-size: 11px;
+  color: var(--text-2);
+  margin: 4px 0 8px;
+}
 .row-organised td:first-child { opacity: 1; }
 
 /* Confidence */
@@ -909,6 +974,7 @@ html, body, #root {
 
 .text-green { color: var(--green); }
 .text-amber { color: var(--amber); }
+.text-blue { color: var(--blue); }
 
 .footer-actions {
   display: flex;

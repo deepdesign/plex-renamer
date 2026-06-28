@@ -167,6 +167,32 @@ export default function Settings({ settings, onChange, onScan, scanning, stage }
 
         <label className="toggle-row">
           <div className="toggle-info">
+            <span className="toggle-label">Clean names without a TMDB match</span>
+            <span className="toggle-sub">Tidy filenames/folders from parsed info even when TMDB has no result</span>
+          </div>
+          <button
+            role="switch"
+            aria-checked={settings.clean_unmatched}
+            className={`toggle ${settings.clean_unmatched ? "toggle--on" : ""}`}
+            onClick={() => update("clean_unmatched", !settings.clean_unmatched)}
+          />
+        </label>
+
+        <label className="toggle-row">
+          <div className="toggle-info">
+            <span className="toggle-label">Look up unmatched titles on Wikipedia</span>
+            <span className="toggle-sub">Use Wikipedia for a canonical title/year (and episode names) when TMDB fails</span>
+          </div>
+          <button
+            role="switch"
+            aria-checked={settings.web_lookup}
+            className={`toggle ${settings.web_lookup ? "toggle--on" : ""}`}
+            onClick={() => update("web_lookup", !settings.web_lookup)}
+          />
+        </label>
+
+        <label className="toggle-row">
+          <div className="toggle-info">
             <span className="toggle-label">Clean up empty folders</span>
             <span className="toggle-sub">Remove source folders left empty after files move out</span>
           </div>

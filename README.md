@@ -87,6 +87,9 @@ Documentaries/
 - The tool never deletes files - it only moves them. "Clean up empty folders" only removes directories that are already empty after a move
 - Every rename batch is logged to `backend/rename_log.json` so it can be undone
 - If a file has no TMDB match, it is flagged as unmatched - use the per-row manual search to correct it
+- With "Clean names without a TMDB match" enabled, unmatched files still get a best-effort Plex name built from the folder (title/year) and filename (season/episode/episode title). These rows are badged **Local** and are not auto-approved - review them before renaming
+- "Look up unmatched titles on Wikipedia" (no API key needed) refines those names with a canonical title, year, and episode name when a Wikipedia article exists; such rows are badged **Web** with a Wikipedia link. Titles with no Wikipedia article fall back to the **Local** filename cleanup
+- Files already in the correct Plex location are flagged **organised** (hidden by default); a file whose target name is already taken is flagged a **conflict** so the rename never silently fails
 - Confidence scores: High (85%+), Medium (60-84%), Low (below 60%)
 
 ---
@@ -106,4 +109,5 @@ Documentaries/
 | POST   | `/api/pick-folder`    | Open the native OS folder picker and return the chosen path    |
 | POST   | `/api/orphan-folders` | Preview folders under the root that contain no video files     |
 | POST   | `/api/delete-folders` | Permanently delete the given (video-free) folders              |
+| POST   | `/api/delete-files`   | Permanently delete specific files (e.g. duplicate sources)     |
 | POST   | `/api/validate-folder`| Check whether a path exists on disk                            |

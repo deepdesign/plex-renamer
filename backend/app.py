@@ -54,6 +54,8 @@ def load_settings():
         "auto_pick_top": True,
         "restructure_folders": True,
         "clean_empty_folders": False,
+        "clean_unmatched": True,
+        "web_lookup": True,
     }
 
 def save_settings(data):
@@ -109,6 +111,37 @@ PART_PATTERN = re.compile(r"\b(?:part|pt|episode|ep)\s*\.?\s*(\d{1,2})\b", re.IG
 # search hint (e.g. a single episode inside a "Season 01" folder).
 SEASON_FOLDER_PATTERN = re.compile(r"^(season[\s._-]*\d+|specials|s\d{1,2})$", re.IGNORECASE)
 
+# "sample" as a whole token in a filename stem -> a throwaway preview clip
+SAMPLE_PATTERN = re.compile(r"(?:^|[\s._-])sample(?:[\s._-]|$)", re.IGNORECASE)
+
+# An embedded IMDb rating tag, e.g. "IMDB 8.2" / "imdb8.1"
+IMDB_RATING_PATTERN = re.compile(r"\bimdb\b\s*\d+(?:\.\d+)?", re.IGNORECASE)
+
+
+def find_episode_marker(name: str):
+    """Return (season, episode, start, end) for the first episode marker, else None."""
+    m = SXXEXX_PATTERN.search(name)
+    if m:
+        return int(m.group(1)), int(m.group(2)), m.start(), m.end()
+    m = NOFM_PATTERN.search(name)
+    if m:
+        return 1, int(m.group(1)), m.start(), m.end()
+    m = PART_PATTERN.search(name)
+    if m:
+        return 1, int(m.group(1)), m.start(), m.end()
+    return None
+
+
+def clean_episode_title(text: str) -> str:
+    """Tidy the text that follows an episode marker into a usable episode name."""
+    text = IMDB_RATING_PATTERN.sub("", text)
+    text = re.sub(r"\(?\b(19[5-9]\d|20[0-3]\d)\b\)?", "", text)  # stray year
+    text = NOISE_PATTERN.sub("", text)
+    text = re.sub(r"[._]+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"^[\s\-\[\]\(\)]+|[\s\-\[\]\(\);,]+$", "", text).strip()
+    return text
+
 
 def parse_filename(raw: str) -> dict:
     """
@@ -155,7 +188,8 @@ def parse_filename(raw: str) -> dict:
     if year_match:
         name = name[: year_match.start()]
 
-    # Strip remaining noise
+    # Strip an embedded IMDb rating tag, then remaining noise
+    name = IMDB_RATING_PATTERN.sub("", name)
     name = NOISE_PATTERN.sub("", name)
 
     # Clean separators: dots, underscores, multiple spaces → single space
@@ -354,6 +388,115 @@ def find_best_match(parsed: dict, api_key: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Wikipedia fallback (free, no API key) - used when TMDB has no confident match
+# ---------------------------------------------------------------------------
+
+WIKI_API = "https://en.wikipedia.org/w/api.php"
+WIKI_HEADERS = {"User-Agent": "PlexMatch/1.0 (local documentary renamer)"}
+
+
+@lru_cache(maxsize=512)
+def wiki_search(query: str) -> tuple:
+    """Return ((page_title, snippet), ...) candidates for a query, best first."""
+    try:
+        r = requests.get(WIKI_API, params={
+            "action": "query", "list": "search", "srsearch": query,
+            "srlimit": 5, "srnamespace": 0, "format": "json",
+        }, headers=WIKI_HEADERS, timeout=10)
+        if r.status_code != 200:
+            return ()
+        hits = r.json().get("query", {}).get("search", [])
+        return tuple((h["title"], h.get("snippet", "")) for h in hits)
+    except requests.RequestException:
+        return ()
+
+
+@lru_cache(maxsize=512)
+def wiki_wikitext(page_title: str) -> str:
+    """Fetch the raw wikitext of a page (following redirects)."""
+    try:
+        r = requests.get(WIKI_API, params={
+            "action": "parse", "page": page_title, "prop": "wikitext",
+            "redirects": 1, "format": "json",
+        }, headers=WIKI_HEADERS, timeout=10)
+        if r.status_code != 200:
+            return ""
+        return r.json().get("parse", {}).get("wikitext", {}).get("*", "")
+    except requests.RequestException:
+        return ""
+
+
+def wiki_canonical_title(page_title: str) -> str:
+    """Drop a trailing disambiguation qualifier, e.g. 'Cosmos (1980 TV series)'."""
+    return re.sub(r"\s*\([^)]*\)\s*$", "", page_title).strip()
+
+
+def _clean_wiki_markup(s: str) -> str:
+    s = s.strip()
+    s = re.sub(r"\[\[(?:[^\]|]*\|)?([^\]]+)\]\]", r"\1", s)  # [[A|B]]->B, [[A]]->A
+    s = re.sub(r"\{\{.*?\}\}", "", s)                          # drop templates
+    s = s.replace("''", "").replace('"', "").replace("&nbsp;", " ")
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def wiki_year(wikitext: str) -> int | None:
+    m = re.search(r"\{\{\s*[Ss]tart date\s*\|\s*(\d{4})", wikitext)
+    if m:
+        return int(m.group(1))
+    m = re.search(
+        r"\|\s*(?:first_aired|released|air_date|first_run|date)\s*=\s*[^\n]*?(19[5-9]\d|20[0-3]\d)",
+        wikitext,
+    )
+    if m:
+        return int(m.group(1))
+    return None
+
+
+def wiki_episode_title(wikitext: str, episode: int) -> str | None:
+    """Best-effort: pull a title from {{Episode list}} entries by episode number."""
+    for chunk in re.split(r"\{\{\s*[Ee]pisode list", wikitext)[1:]:
+        chunk = chunk[:1500]  # an entry is short; avoid bleeding into the next
+        num = re.search(r"EpisodeNumber\s*=\s*([0-9]+)", chunk)
+        title = re.search(r"\bTitle\s*=\s*([^\n|]+)", chunk)
+        if num and title and int(num.group(1)) == episode:
+            cleaned = _clean_wiki_markup(title.group(1))
+            if cleaned:
+                return cleaned
+    return None
+
+
+def wiki_lookup(title: str, year: int | None, season, episode) -> dict | None:
+    """Find a confident Wikipedia page for `title`; return canonical title/year
+    (and episode name when possible). None if nothing matches well enough."""
+    from difflib import SequenceMatcher
+
+    results = wiki_search(title)
+    if not results:
+        return None
+
+    best_page, best_score = None, 0.0
+    for page_title, _snippet in results:
+        cand = wiki_canonical_title(page_title)
+        score = SequenceMatcher(None, title.lower(), cand.lower()).ratio()
+        if score > best_score:
+            best_score, best_page = score, page_title
+
+    if not best_page or best_score < 0.6:
+        return None
+
+    wikitext = wiki_wikitext(best_page)
+    ep_title = wiki_episode_title(wikitext, episode) if (season and episode) else None
+
+    return {
+        "title": wiki_canonical_title(best_page),
+        "year": wiki_year(wikitext) or year,
+        "episode_name": ep_title,
+        "wiki_url": "https://en.wikipedia.org/wiki/" + best_page.replace(" ", "_"),
+        "confidence": round(best_score, 3),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Plex naming
 # ---------------------------------------------------------------------------
 
@@ -370,19 +513,22 @@ def build_plex_names(match: dict, original_ext: str) -> dict:
     year = match["matched_year"]
     media_type = match["type"]
 
+    # Plex prefers "Title (Year)" but a year isn't always known (local cleanups)
+    title_year = f"{title} ({year})" if year else title
+
     if media_type == "movie":
-        folder = f"{title} ({year})"
-        filename = f"{title} ({year}){original_ext}"
+        folder = title_year
+        filename = f"{title_year}{original_ext}"
     else:
         season = match["season"] or 1
         episode = match["episode"] or 1
         ep_title = sanitise_filename(match["episode_name"]) if match["episode_name"] else ""
         season_folder = f"Season {season:02d}"
-        folder = os.path.join(f"{title} ({year})", season_folder)
+        folder = os.path.join(title_year, season_folder)
         if ep_title:
-            filename = f"{title} ({year}) - S{season:02d}E{episode:02d} - {ep_title}{original_ext}"
+            filename = f"{title_year} - S{season:02d}E{episode:02d} - {ep_title}{original_ext}"
         else:
-            filename = f"{title} ({year}) - S{season:02d}E{episode:02d}{original_ext}"
+            filename = f"{title_year} - S{season:02d}E{episode:02d}{original_ext}"
 
     return {"folder": folder, "filename": filename}
 
@@ -407,11 +553,14 @@ def scan_directory(root: str) -> list:
             if Path(f).suffix.lower() in VIDEO_EXTENSIONS
         ]
 
-        # Skip subtitle/extras folders
+        # Skip subtitle/extras/sample folders
         dirnames[:] = [
             d for d in dirnames
-            if d.lower() not in {"subs", "subtitles", "extras", "featurettes", "behind the scenes"}
+            if d.lower() not in {"subs", "subtitles", "extras", "featurettes", "behind the scenes", "sample", "samples"}
         ]
+
+        # Drop obvious sample clips (e.g. "...-sample.avi", "movie.sample.mkv")
+        video_files = [f for f in video_files if not SAMPLE_PATTERN.search(Path(f).stem)]
 
         for vf in video_files:
             full_path = os.path.join(dirpath, vf)
@@ -445,10 +594,130 @@ def scan_directory(root: str) -> list:
 # Proposal building
 # ---------------------------------------------------------------------------
 
-def build_proposal(f: dict, root: str, api_key: str) -> dict:
+def proposal_status(proposed_full_path: str, current_full_path: str, default: str = "pending") -> str:
+    """organised if already in place, conflict if target taken, else `default`."""
+    def _norm(p):
+        return os.path.normcase(os.path.normpath(p))
+    if _norm(proposed_full_path) == _norm(current_full_path):
+        return "organised"
+    if os.path.exists(proposed_full_path):
+        return "conflict"
+    return default
+
+
+def series_folder_name(full_path: str, root: str) -> str | None:
+    """The title-bearing folder for a file (its parent, or grandparent if the
+    parent is a 'Season NN' folder). None for files sitting directly in root."""
+    parent = os.path.dirname(full_path)
+    if os.path.abspath(parent) == os.path.abspath(root):
+        return None
+    name = os.path.basename(parent)
+    if SEASON_FOLDER_PATTERN.match(name.strip()):
+        grand = os.path.dirname(parent)
+        if os.path.abspath(grand) != os.path.abspath(root):
+            return os.path.basename(grand)
+        return None
+    return name
+
+
+def build_local_cleanup(f: dict, root: str, web_lookup: bool = False) -> dict | None:
+    """
+    Best-effort Plex naming WITHOUT TMDB: derive the title/year from the series
+    folder and the season/episode/episode-title from the filename. When
+    web_lookup is set, refine the title/year/episode-name via Wikipedia.
+    Returns a proposal dict (status cleanup/organised/conflict) or None.
+    """
+    filename_stem = Path(f["filename"]).stem
+
+    folder_name = series_folder_name(f["full_path"], root)
+    folder_parsed = parse_filename(folder_name) if folder_name else {"title": "", "year": None}
+    file_parsed = parse_filename(filename_stem)
+
+    # Season/episode + episode title come from the filename's marker
+    marker = find_episode_marker(filename_stem)
+    season = episode = None
+    episode_title = ""
+    if marker:
+        season, episode, _start, end = marker
+        episode_title = clean_episode_title(filename_stem[end:])
+    else:
+        season, episode = file_parsed["season"], file_parsed["episode"]
+
+    # Title: a folder named "Title (Year)" is the most reliable source; without a
+    # year the folder is often just a release name, so prefer the filename's title.
+    folder_title, file_title = folder_parsed["title"], file_parsed["title"]
+    if folder_parsed["year"] or not file_title:
+        title = folder_title or file_title
+    else:
+        title = file_title or folder_title
+    if not title:
+        return None
+    year = folder_parsed["year"] or file_parsed["year"]
+    is_tv = bool(season and episode)
+
+    # Drop a redundant series-name prefix from the episode title
+    if episode_title and episode_title.lower().startswith(title.lower()):
+        episode_title = re.sub(r"^[\s\-:;,]+", "", episode_title[len(title):]).strip()
+
+    # Optionally refine via Wikipedia: canonical title, year, episode name
+    source = "local"
+    info_url = None
+    confidence = 0
+    if web_lookup:
+        hit = wiki_lookup(title, year, season, episode)
+        if hit:
+            source = "wikipedia"
+            title = hit["title"]
+            year = hit["year"]
+            if hit["episode_name"]:
+                episode_title = hit["episode_name"]
+            info_url = hit["wiki_url"]
+            confidence = hit["confidence"]
+
+    media_type = "tv" if is_tv else "movie"
+    match_like = {
+        "matched_title": title,
+        "matched_year": str(year) if year else "",
+        "type": media_type,
+        "season": season,
+        "episode": episode,
+        "episode_name": episode_title or None,
+    }
+    plex_names = build_plex_names(match_like, f["ext"])
+    proposed_full_path = os.path.join(root, plex_names["folder"], plex_names["filename"])
+    status = proposal_status(proposed_full_path, f["full_path"], default="cleanup")
+
+    return {
+        **f,
+        "parsed": file_parsed,
+        "matched": False,
+        "confidence": confidence,
+        "type": media_type,
+        "matched_title": title,
+        "matched_year": match_like["matched_year"],
+        "episode_name": episode_title or None,
+        "season": season,
+        "episode": episode,
+        "local_cleanup": True,
+        "source": source,
+        "wiki_url": info_url,
+        "proposed_folder": plex_names["folder"],
+        "proposed_filename": plex_names["filename"],
+        "proposed_full_path": proposed_full_path,
+        "status": status,
+    }
+
+
+def build_proposal(f: dict, root: str, api_key: str,
+                   clean_unmatched: bool = False, web_lookup: bool = False) -> dict:
     """Match a single scanned file against TMDB and build a proposal dict."""
+    do_cleanup = clean_unmatched or web_lookup
     parsed = parse_filename(f["parse_hint"])
     if not parsed["title"]:
+        if do_cleanup:
+            cleanup = build_local_cleanup(f, root, web_lookup=web_lookup)
+            if cleanup:
+                return cleanup
         return {
             **f,
             "parsed": parsed,
@@ -471,15 +740,15 @@ def build_proposal(f: dict, root: str, api_key: str) -> dict:
         }
 
     if not match["matched"] or match["confidence"] < 0.3:
+        if do_cleanup:
+            cleanup = build_local_cleanup(f, root, web_lookup=web_lookup)
+            if cleanup:
+                return cleanup
         return {**f, "parsed": parsed, **match, "status": "unmatched"}
 
     plex_names = build_plex_names(match, f["ext"])
     proposed_full_path = os.path.join(root, plex_names["folder"], plex_names["filename"])
-
-    # If the file is already exactly where it should be, it's organised already.
-    def _norm(p):
-        return os.path.normcase(os.path.normpath(p))
-    already_organised = _norm(proposed_full_path) == _norm(f["full_path"])
+    status = proposal_status(proposed_full_path, f["full_path"], default="pending")
 
     return {
         **f,
@@ -488,8 +757,7 @@ def build_proposal(f: dict, root: str, api_key: str) -> dict:
         "proposed_folder": plex_names["folder"],
         "proposed_filename": plex_names["filename"],
         "proposed_full_path": proposed_full_path,
-        # organised = already in the correct Plex location (no rename needed)
-        "status": "organised" if already_organised else "pending",
+        "status": status,
     }
 
 
@@ -616,10 +884,14 @@ def scan():
     if not api_key:
         return jsonify({"error": "TMDB API key is required"}), 400
 
+    clean_unmatched = bool(data.get("clean_unmatched", False))
+    web_lookup = bool(data.get("web_lookup", False))
     files = scan_directory(root)
     with ThreadPoolExecutor(max_workers=SCAN_CONCURRENCY) as executor:
         # executor.map preserves input order
-        proposals = list(executor.map(lambda f: build_proposal(f, root, api_key), files))
+        proposals = list(executor.map(
+            lambda f: build_proposal(f, root, api_key, clean_unmatched, web_lookup), files
+        ))
     return jsonify({"proposals": proposals, "root": root})
 
 
@@ -643,6 +915,8 @@ def scan_stream():
     if not api_key:
         return jsonify({"error": "TMDB API key is required"}), 400
 
+    clean_unmatched = bool(data.get("clean_unmatched", False))
+    web_lookup = bool(data.get("web_lookup", False))
     files = scan_directory(root)
 
     def sse(obj: dict) -> str:
@@ -654,7 +928,7 @@ def scan_stream():
         # each proposal as soon as it's ready.
         with ThreadPoolExecutor(max_workers=SCAN_CONCURRENCY) as executor:
             futures = {
-                executor.submit(build_proposal, f, root, api_key): i
+                executor.submit(build_proposal, f, root, api_key, clean_unmatched, web_lookup): i
                 for i, f in enumerate(files)
             }
             for future in as_completed(futures):
@@ -730,13 +1004,25 @@ def rematch():
         return jsonify({"matched": False, "confidence": 0, "status": "unmatched"})
 
     plex_names = build_plex_names(match, ext)
+    proposed_full_path = os.path.join(root, plex_names["folder"], plex_names["filename"])
+
+    def _norm(p):
+        return os.path.normcase(os.path.normpath(p))
+    full_path = data.get("full_path", "")
+    if full_path and _norm(proposed_full_path) == _norm(full_path):
+        status = "organised"
+    elif os.path.exists(proposed_full_path):
+        status = "conflict"
+    else:
+        status = "pending"
+
     return jsonify({
         **match,
         "parsed": parsed,
         "proposed_folder": plex_names["folder"],
         "proposed_filename": plex_names["filename"],
-        "proposed_full_path": os.path.join(root, plex_names["folder"], plex_names["filename"]),
-        "status": "pending",
+        "proposed_full_path": proposed_full_path,
+        "status": status,
     })
 
 
@@ -945,6 +1231,37 @@ def delete_folders():
             results.append({"path": folder, "ok": True})
         except Exception as e:  # noqa: BLE001 - report any failure per-folder
             results.append({"path": folder, "ok": False, "error": str(e)})
+
+    return jsonify({"results": results})
+
+
+@app.route("/api/delete-files", methods=["POST"])
+def delete_files():
+    """
+    Delete individual files (used to remove duplicate source files whose target
+    is already organised). Each file is re-verified to live inside root.
+    Body: { root_folder, files: [<abs path>, ...] }
+    """
+    data = request.json or {}
+    root = (data.get("root_folder") or "").strip()
+    files = data.get("files") or []
+
+    if not root or not os.path.isdir(root):
+        return jsonify({"error": f"Folder not found: {root}"}), 400
+
+    root_abs = os.path.abspath(root)
+    results = []
+    for fpath in files:
+        target = os.path.abspath(fpath)
+        try:
+            if target == root_abs or os.path.commonpath([root_abs, target]) != root_abs:
+                raise ValueError("File is outside the library root")
+            if not os.path.isfile(target):
+                raise FileNotFoundError("File no longer exists")
+            os.remove(target)
+            results.append({"path": fpath, "ok": True})
+        except Exception as e:  # noqa: BLE001 - report any failure per-file
+            results.append({"path": fpath, "ok": False, "error": str(e)})
 
     return jsonify({"results": results})
 

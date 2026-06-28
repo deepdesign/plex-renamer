@@ -22,12 +22,13 @@ function ConfidencePip({ value }) {
   )
 }
 
-function ProposalRow({ proposal, index, onChange, root, apiKey }) {
+function ProposalRow({ proposal, index, onChange, onRemove, root, apiKey }) {
   const [expanded, setExpanded] = useState(false)
   const [manualTitle, setManualTitle] = useState("")
   const [manualYear, setManualYear] = useState("")
   const [busy, setBusy] = useState(false)
   const [searchError, setSearchError] = useState(null)
+  const [confirmDelete, setConfirmDelete] = useState(false)
 
   const toggle = () => {
     onChange(index, { ...proposal, approved: !proposal.approved })
@@ -83,20 +84,46 @@ function ProposalRow({ proposal, index, onChange, root, apiKey }) {
     rematch({ manual_title: manualTitle.trim(), manual_year: manualYear.trim() })
   }
 
-  const isUnmatched = !proposal.matched || proposal.status === "unmatched"
+  const deleteSource = async () => {
+    setBusy(true)
+    setSearchError(null)
+    try {
+      const res = await fetch(`${API}/api/delete-files`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ root_folder: root, files: [proposal.full_path] }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || "Delete failed")
+      const r = data.results?.[0]
+      if (!r?.ok) throw new Error(r?.error || "Could not delete file")
+      onRemove(index)
+    } catch (e) {
+      setSearchError(e.message)
+      setBusy(false)
+    }
+  }
+
+  const isUnmatched = proposal.status === "unmatched"
   const isError = proposal.status === "error"
   const isOrganised = proposal.status === "organised"
+  const isConflict = proposal.status === "conflict"
+  const isCleanup = proposal.status === "cleanup"
+  const isWeb = isCleanup && proposal.source === "wikipedia"
 
   return (
     <>
-      <tr className={`proposal-row ${isOrganised ? "row-organised" : proposal.approved ? "row-approved" : "row-rejected"} ${isUnmatched ? "row-unmatched" : ""}`}>
+      <tr className={`proposal-row ${isOrganised ? "row-organised" : isConflict ? "row-conflict" : proposal.approved ? "row-approved" : "row-rejected"} ${isUnmatched ? "row-unmatched" : ""}`}>
         <td className="col-approve">
           {isOrganised && (
             <span className="organised-icon" title="Already in Plex format - no rename needed">
               <svg viewBox="0 0 14 14" fill="none"><path d="M2 7l4 4 6-6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
             </span>
           )}
-          {!isOrganised && !isUnmatched && !isError && (
+          {isConflict && (
+            <span className="conflict-icon" title="A file already exists at the target location">!</span>
+          )}
+          {!isOrganised && !isConflict && !isUnmatched && !isError && (
             <button
               className={`approve-btn ${proposal.approved ? "approved" : "rejected"}`}
               onClick={toggle}
@@ -108,7 +135,7 @@ function ProposalRow({ proposal, index, onChange, root, apiKey }) {
               }
             </button>
           )}
-          {!isOrganised && (isUnmatched || isError) && (
+          {!isOrganised && !isConflict && (isUnmatched || isError) && (
             <span className="unmatched-icon" title="No TMDB match found">?</span>
           )}
         </td>
@@ -127,6 +154,12 @@ function ProposalRow({ proposal, index, onChange, root, apiKey }) {
           ) : (
             <div className="proposed-names">
               {isOrganised && <span className="organised-label">Already organised</span>}
+              {isConflict && <span className="conflict-label">Target already exists - duplicate or wrong match</span>}
+              {isCleanup && (
+                <span className="cleanup-label">
+                  {isWeb ? "Matched via Wikipedia - no TMDB result" : "Cleaned from filename - no TMDB match"}
+                </span>
+              )}
               <span className="proposed-folder">{proposal.proposed_folder}/</span>
               <span className="proposed-file">{proposal.proposed_filename}</span>
             </div>
@@ -134,15 +167,23 @@ function ProposalRow({ proposal, index, onChange, root, apiKey }) {
         </td>
 
         <td className="col-confidence">
-          {!isUnmatched && !isError && (
+          {isCleanup ? (
+            isWeb
+              ? <span className="web-badge" title="Title/year from Wikipedia">Web</span>
+              : <span className="local-badge" title="Named from the filename/folder; not verified against TMDB">Local</span>
+          ) : !isUnmatched && !isError && (
             <ConfidencePip value={proposal.confidence} />
           )}
         </td>
 
         <td className="col-tmdb">
-          {proposal.tmdb_url && (
+          {proposal.tmdb_url ? (
             <a href={proposal.tmdb_url} target="_blank" rel="noreferrer" className="tmdb-link">
               TMDB ↗
+            </a>
+          ) : proposal.wiki_url && (
+            <a href={proposal.wiki_url} target="_blank" rel="noreferrer" className="tmdb-link">
+              Wiki ↗
             </a>
           )}
         </td>
@@ -164,6 +205,29 @@ function ProposalRow({ proposal, index, onChange, root, apiKey }) {
         <tr className="alt-row">
           <td colSpan={7}>
             <div className="alt-panel">
+              {isConflict && (
+                <div className="conflict-resolve">
+                  <span className="alt-heading">A file already exists at the target</span>
+                  <p className="conflict-help">
+                    If this source is a leftover duplicate of an already-organised title,
+                    delete it. If it was matched to the wrong title, search again below.
+                  </p>
+                  {!confirmDelete ? (
+                    <button className="btn-danger" onClick={() => setConfirmDelete(true)} disabled={busy}>
+                      Delete this duplicate source file
+                    </button>
+                  ) : (
+                    <div className="confirm-inline">
+                      <span>Permanently delete the source file?</span>
+                      <button className="btn-ghost" onClick={() => setConfirmDelete(false)} disabled={busy}>Cancel</button>
+                      <button className="btn-danger" onClick={deleteSource} disabled={busy}>
+                        {busy ? "Deleting..." : "Yes, delete"}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {proposal.alternatives?.length > 0 && (
                 <>
                   <span className="alt-heading">Alternative matches - click to use</span>
@@ -255,8 +319,13 @@ export default function ProposalTable({ proposals, onChange, root, apiKey }) {
     onChange(next)
   }
 
+  const removeRow = (index) => {
+    const target = filtered[index].full_path
+    onChange(proposals.filter(p => p.full_path !== target))
+  }
+
   const approveAll = () => onChange(proposals.map(p =>
-    p.matched && p.status === "pending" ? { ...p, approved: true } : p
+    p.status === "pending" || p.status === "cleanup" ? { ...p, approved: true } : p
   ))
   const rejectAll = () => onChange(proposals.map(p => ({ ...p, approved: false })))
 
@@ -318,6 +387,7 @@ export default function ProposalTable({ proposals, onChange, root, apiKey }) {
                 proposal={p}
                 index={i}
                 onChange={updateRow}
+                onRemove={removeRow}
                 root={root}
                 apiKey={apiKey}
               />
