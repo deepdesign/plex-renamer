@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react"
+import OrphanCleanup from "./OrphanCleanup"
 
 const API = "http://localhost:5174"
 
@@ -8,6 +9,7 @@ export default function Settings({ settings, onChange, onScan, scanning, stage }
   const [localFolder, setLocalFolder] = useState(settings.root_folder || "")
   const [picking, setPicking] = useState(false)
   const [pickError, setPickError] = useState(null)
+  const [cleaningOrphans, setCleaningOrphans] = useState(false)
 
   // Keep the input in sync when the stored folder changes (load, self-heal, pick)
   useEffect(() => {
@@ -175,6 +177,19 @@ export default function Settings({ settings, onChange, onScan, scanning, stage }
             onClick={() => update("clean_empty_folders", !settings.clean_empty_folders)}
           />
         </label>
+
+        <button
+          className="btn-secondary btn-cleanup"
+          onClick={() => setCleaningOrphans(true)}
+          disabled={!settings.root_folder || folderValid === false}
+          title="Find and delete folders that contain no video files"
+        >
+          <svg viewBox="0 0 16 16" fill="none">
+            <path d="M3 4h10M6 4V3a1 1 0 011-1h2a1 1 0 011 1v1M5 4l.5 9a1 1 0 001 1h3a1 1 0 001-1L11 4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+          </svg>
+          Clean up orphaned folders
+        </button>
+        <span className="toggle-sub">Delete folders with no video files (only <code>.txt</code>, <code>.nfo</code>, images, etc.)</span>
       </div>
 
       <button
@@ -200,6 +215,10 @@ export default function Settings({ settings, onChange, onScan, scanning, stage }
 
       {!settings.tmdb_api_key && (
         <p className="settings-warn">Enter a TMDB API key to scan.</p>
+      )}
+
+      {cleaningOrphans && (
+        <OrphanCleanup root={settings.root_folder} onClose={() => setCleaningOrphans(false)} />
       )}
     </div>
   )

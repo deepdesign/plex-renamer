@@ -223,9 +223,16 @@ function ProposalRow({ proposal, index, onChange, root, apiKey }) {
 export default function ProposalTable({ proposals, onChange, root, apiKey }) {
   const [filter, setFilter] = useState("all") // all | matched | unmatched
   const [search, setSearch] = useState("")
+  const [showOrganised, setShowOrganised] = useState(false)
+
+  const organisedCount = useMemo(
+    () => proposals.filter(p => p.status === "organised").length,
+    [proposals]
+  )
 
   const filtered = useMemo(() => {
     return proposals.filter(p => {
+      if (!showOrganised && p.status === "organised") return false
       if (filter === "matched" && (!p.matched || p.status === "unmatched")) return false
       if (filter === "unmatched" && p.matched && p.status !== "unmatched") return false
       if (search) {
@@ -274,6 +281,16 @@ export default function ProposalTable({ proposals, onChange, root, apiKey }) {
               </button>
             ))}
           </div>
+          {organisedCount > 0 && (
+            <label className="organised-toggle" title="Files already in Plex format that need no rename">
+              <input
+                type="checkbox"
+                checked={showOrganised}
+                onChange={e => setShowOrganised(e.target.checked)}
+              />
+              Show {organisedCount} already organised
+            </label>
+          )}
         </div>
         <div className="toolbar-right">
           <button className="btn-ghost" onClick={approveAll}>Approve all</button>
@@ -309,7 +326,11 @@ export default function ProposalTable({ proposals, onChange, root, apiKey }) {
         </table>
 
         {filtered.length === 0 && (
-          <div className="table-empty">No files match the current filter.</div>
+          <div className="table-empty">
+            {!showOrganised && organisedCount > 0 && proposals.length === organisedCount
+              ? `All ${organisedCount} files are already organised - nothing to rename.`
+              : "No files match the current filter."}
+          </div>
         )}
       </div>
     </div>

@@ -104,4 +104,6 @@ Documentaries/
 | GET    | `/api/rename-log`     | List logged rename batches (most recent first)                 |
 | POST   | `/api/undo`           | Reverse a rename batch (defaults to the most recent)           |
 | POST   | `/api/pick-folder`    | Open the native OS folder picker and return the chosen path    |
+| POST   | `/api/orphan-folders` | Preview folders under the root that contain no video files     |
+| POST   | `/api/delete-folders` | Permanently delete the given (video-free) folders              |
 | POST   | `/api/validate-folder`| Check whether a path exists on disk                            |

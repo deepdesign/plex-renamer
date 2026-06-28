@@ -544,6 +544,62 @@ def remove_empty_dirs(root: str) -> list:
     return removed
 
 
+def _subtree_has_video(dirpath: str) -> bool:
+    """True if dirpath or any descendant contains a video file."""
+    for _dp, _dn, filenames in os.walk(dirpath):
+        if any(Path(f).suffix.lower() in VIDEO_EXTENSIONS for f in filenames):
+            return True
+    return False
+
+
+def find_orphan_folders(root: str) -> list:
+    """
+    Find the top-most folders under root whose entire subtree contains no video
+    files (e.g. leftover release folders holding only .txt/.nfo/.jpg). A folder
+    is reported only if its parent DOES still contain video (or is root), so a
+    junk folder rolls up to a single deletable entry instead of every subfolder.
+    """
+    root_abs = os.path.abspath(root)
+
+    # Bottom-up pass: does each directory's subtree contain any video?
+    has_video = {}
+    for dirpath, dirnames, filenames in os.walk(root, topdown=False):
+        dp_abs = os.path.abspath(dirpath)
+        vid_here = any(Path(f).suffix.lower() in VIDEO_EXTENSIONS for f in filenames)
+        vid_child = any(has_video.get(os.path.abspath(os.path.join(dirpath, d)), False) for d in dirnames)
+        has_video[dp_abs] = vid_here or vid_child
+
+    orphans = []
+    for dirpath in has_video:
+        if dirpath == root_abs or has_video[dirpath]:
+            continue
+        parent = os.path.dirname(dirpath)
+        # Report only the top-most empty folder (parent still has video, or is root)
+        if parent != root_abs and not has_video.get(parent, True):
+            continue
+
+        # Summarise what's inside so the user knows what they're deleting
+        file_count = 0
+        exts = set()
+        for _dp, _dn, filenames in os.walk(dirpath):
+            file_count += len(filenames)
+            for f in filenames:
+                suffix = Path(f).suffix.lower()
+                if suffix:
+                    exts.add(suffix)
+
+        orphans.append({
+            "path": dirpath,
+            "rel_path": os.path.relpath(dirpath, root),
+            "name": os.path.basename(dirpath),
+            "file_count": file_count,
+            "extensions": sorted(exts),
+        })
+
+    orphans.sort(key=lambda o: o["rel_path"].lower())
+    return orphans
+
+
 # ---------------------------------------------------------------------------
 # API routes
 # ---------------------------------------------------------------------------
@@ -845,6 +901,52 @@ def validate_folder():
     path = request.json.get("path", "")
     exists = os.path.isdir(path)
     return jsonify({"exists": exists, "path": path})
+
+
+@app.route("/api/orphan-folders", methods=["POST"])
+def orphan_folders():
+    """Preview folders under root that contain no video files (safe to delete)."""
+    data = request.json or {}
+    root = (data.get("root_folder") or "").strip()
+    if not root or not os.path.isdir(root):
+        return jsonify({"error": f"Folder not found: {root}"}), 400
+    return jsonify({"folders": find_orphan_folders(root)})
+
+
+@app.route("/api/delete-folders", methods=["POST"])
+def delete_folders():
+    """
+    Delete the given folders. Each is re-verified to be inside root and to
+    contain no video files before removal, so an out-of-date preview can never
+    delete a folder that has since gained a video.
+    Body: { root_folder, folders: [<abs path>, ...] }
+    """
+    data = request.json or {}
+    root = (data.get("root_folder") or "").strip()
+    folders = data.get("folders") or []
+
+    if not root or not os.path.isdir(root):
+        return jsonify({"error": f"Folder not found: {root}"}), 400
+
+    root_abs = os.path.abspath(root)
+    results = []
+    for folder in folders:
+        target = os.path.abspath(folder)
+        try:
+            # Safety: must live strictly inside root and never be root itself
+            if target == root_abs or os.path.commonpath([root_abs, target]) != root_abs:
+                raise ValueError("Folder is outside the library root")
+            if not os.path.isdir(target):
+                raise FileNotFoundError("Folder no longer exists")
+            if _subtree_has_video(target):
+                raise ValueError("Folder now contains a video file - skipped")
+
+            shutil.rmtree(target)
+            results.append({"path": folder, "ok": True})
+        except Exception as e:  # noqa: BLE001 - report any failure per-folder
+            results.append({"path": folder, "ok": False, "error": str(e)})
+
+    return jsonify({"results": results})
 
 
 if __name__ == "__main__":
