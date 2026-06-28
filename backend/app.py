@@ -105,6 +105,10 @@ SXXEXX_PATTERN = re.compile(r"[Ss](\d{1,2})[Ee](\d{1,2})")
 NOFM_PATTERN = re.compile(r"\b(\d{1,2})\s*of\s*(\d{1,2})\b", re.IGNORECASE)
 PART_PATTERN = re.compile(r"\b(?:part|pt|episode|ep)\s*\.?\s*(\d{1,2})\b", re.IGNORECASE)
 
+# Folder names that carry no useful title info, so they must never be used as a
+# search hint (e.g. a single episode inside a "Season 01" folder).
+SEASON_FOLDER_PATTERN = re.compile(r"^(season[\s._-]*\d+|specials|s\d{1,2})$", re.IGNORECASE)
+
 
 def parse_filename(raw: str) -> dict:
     """
@@ -158,7 +162,7 @@ def parse_filename(raw: str) -> dict:
     name = re.sub(r"[._]+", " ", name)
     name = re.sub(r"\s+", " ", name).strip()
     # Remove trailing/leading hyphens and brackets
-    name = re.sub(r"^[\s\-\[\(]+|[\s\-\[\)]+$", "", name).strip()
+    name = re.sub(r"^[\s\-\[\]\(\)]+|[\s\-\[\]\(\)]+$", "", name).strip()
 
     return {
         "title": name,
@@ -413,11 +417,14 @@ def scan_directory(root: str) -> list:
             full_path = os.path.join(dirpath, vf)
             rel_dir = os.path.relpath(dirpath, root)
 
-            # If this is the only video file in its folder, use folder name as hint
+            # If this is the only video file in its folder, the folder name is
+            # usually a cleaner hint than a cryptic release filename - EXCEPT for
+            # "Season NN"/"Specials" folders, whose names carry no title.
             folder_name = Path(dirpath).name
             use_folder_as_hint = (
                 len(video_files) == 1
                 and folder_name.lower() not in {"documentaries", os.path.basename(root).lower()}
+                and not SEASON_FOLDER_PATTERN.match(folder_name.strip())
             )
 
             parse_hint = folder_name if use_folder_as_hint else Path(vf).stem
