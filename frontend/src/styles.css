@@ -759,6 +759,14 @@ html, body, #root {
   color: var(--blue);
 }
 
+.missing-year-label {
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--amber);
+}
+
 .local-badge,
 .web-badge {
   display: inline-block;

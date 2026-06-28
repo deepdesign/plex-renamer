@@ -193,6 +193,32 @@ export default function Settings({ settings, onChange, onScan, scanning, stage }
 
         <label className="toggle-row">
           <div className="toggle-info">
+            <span className="toggle-label">Separate Movies and TV Shows</span>
+            <span className="toggle-sub">Put films in <code>Movies/</code> and series in <code>TV/</code> so each can be its own Plex library (Plex ignores mixed content)</span>
+          </div>
+          <button
+            role="switch"
+            aria-checked={settings.split_libraries}
+            className={`toggle ${settings.split_libraries ? "toggle--on" : ""}`}
+            onClick={() => update("split_libraries", !settings.split_libraries)}
+          />
+        </label>
+
+        <label className="toggle-row">
+          <div className="toggle-info">
+            <span className="toggle-label">Add TMDB/IMDb IDs to folder names</span>
+            <span className="toggle-sub">Append <code>{"{tmdb-…}"}</code> to folders so Plex matches exactly (recommended for obscure docs)</span>
+          </div>
+          <button
+            role="switch"
+            aria-checked={settings.embed_ids}
+            className={`toggle ${settings.embed_ids ? "toggle--on" : ""}`}
+            onClick={() => update("embed_ids", !settings.embed_ids)}
+          />
+        </label>
+
+        <label className="toggle-row">
+          <div className="toggle-info">
             <span className="toggle-label">Clean up empty folders</span>
             <span className="toggle-sub">Remove source folders left empty after files move out</span>
           </div>

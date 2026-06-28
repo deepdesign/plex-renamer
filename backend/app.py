@@ -56,6 +56,8 @@ def load_settings():
         "clean_empty_folders": False,
         "clean_unmatched": True,
         "web_lookup": True,
+        "split_libraries": True,
+        "embed_ids": True,
     }
 
 def save_settings(data):
@@ -505,9 +507,18 @@ def sanitise_filename(name: str) -> str:
     return re.sub(r'[<>:"/\\|?*]', "", name).strip()
 
 
-def build_plex_names(match: dict, original_ext: str) -> dict:
+# Subfolder names used when splitting films/series into separate Plex libraries
+MOVIES_DIR = "Movies"
+TV_DIR = "TV"
+
+
+def build_plex_names(match: dict, original_ext: str,
+                     split: bool = False, embed_ids: bool = False) -> dict:
     """
     Returns proposed folder path (relative to root) and filename.
+    When `split`, films go under "Movies/" and series under "TV/" so each can
+    be served by a separate Plex library. When
+    `embed_ids`, a {tmdb-...} tag is appended to the folder for exact matching.
     """
     title = sanitise_filename(match["matched_title"])
     year = match["matched_year"]
@@ -516,19 +527,29 @@ def build_plex_names(match: dict, original_ext: str) -> dict:
     # Plex prefers "Title (Year)" but a year isn't always known (local cleanups)
     title_year = f"{title} ({year})" if year else title
 
+    # Optional {tmdb-id}/{imdb-id} tag on the show/movie folder for exact matching
+    id_tag = ""
+    if embed_ids:
+        if match.get("tmdb_id"):
+            id_tag = f" {{tmdb-{match['tmdb_id']}}}"
+        elif match.get("imdb_id"):
+            id_tag = f" {{imdb-{match['imdb_id']}}}"
+    show_folder = title_year + id_tag
+
     if media_type == "movie":
-        folder = title_year
         filename = f"{title_year}{original_ext}"
+        folder = os.path.join(MOVIES_DIR, show_folder) if split else show_folder
     else:
         season = match["season"] or 1
         episode = match["episode"] or 1
         ep_title = sanitise_filename(match["episode_name"]) if match["episode_name"] else ""
         season_folder = f"Season {season:02d}"
-        folder = os.path.join(title_year, season_folder)
         if ep_title:
             filename = f"{title_year} - S{season:02d}E{episode:02d} - {ep_title}{original_ext}"
         else:
             filename = f"{title_year} - S{season:02d}E{episode:02d}{original_ext}"
+        base = os.path.join(show_folder, season_folder)
+        folder = os.path.join(TV_DIR, base) if split else base
 
     return {"folder": folder, "filename": filename}
 
@@ -620,11 +641,15 @@ def series_folder_name(full_path: str, root: str) -> str | None:
     return name
 
 
-def build_local_cleanup(f: dict, root: str, web_lookup: bool = False) -> dict | None:
+def build_local_cleanup(f: dict, root: str, web_lookup: bool = False,
+                        split: bool = False, embed_ids: bool = False,
+                        title_override: str | None = None,
+                        year_override=None) -> dict | None:
     """
     Best-effort Plex naming WITHOUT TMDB: derive the title/year from the series
     folder and the season/episode/episode-title from the filename. When
     web_lookup is set, refine the title/year/episode-name via Wikipedia.
+    title_override/year_override let the user fix the result by hand.
     Returns a proposal dict (status cleanup/organised/conflict) or None.
     """
     filename_stem = Path(f["filename"]).stem
@@ -674,6 +699,12 @@ def build_local_cleanup(f: dict, root: str, web_lookup: bool = False) -> dict | 
             info_url = hit["wiki_url"]
             confidence = hit["confidence"]
 
+    # User-supplied corrections win over anything parsed/looked-up
+    if title_override:
+        title = title_override.strip()
+    if year_override not in (None, ""):
+        year = year_override
+
     media_type = "tv" if is_tv else "movie"
     match_like = {
         "matched_title": title,
@@ -683,7 +714,7 @@ def build_local_cleanup(f: dict, root: str, web_lookup: bool = False) -> dict | 
         "episode": episode,
         "episode_name": episode_title or None,
     }
-    plex_names = build_plex_names(match_like, f["ext"])
+    plex_names = build_plex_names(match_like, f["ext"], split, embed_ids)
     proposed_full_path = os.path.join(root, plex_names["folder"], plex_names["filename"])
     status = proposal_status(proposed_full_path, f["full_path"], default="cleanup")
 
@@ -701,6 +732,7 @@ def build_local_cleanup(f: dict, root: str, web_lookup: bool = False) -> dict | 
         "local_cleanup": True,
         "source": source,
         "wiki_url": info_url,
+        "missing_year": not year,
         "proposed_folder": plex_names["folder"],
         "proposed_filename": plex_names["filename"],
         "proposed_full_path": proposed_full_path,
@@ -709,13 +741,14 @@ def build_local_cleanup(f: dict, root: str, web_lookup: bool = False) -> dict | 
 
 
 def build_proposal(f: dict, root: str, api_key: str,
-                   clean_unmatched: bool = False, web_lookup: bool = False) -> dict:
+                   clean_unmatched: bool = False, web_lookup: bool = False,
+                   split: bool = False, embed_ids: bool = False) -> dict:
     """Match a single scanned file against TMDB and build a proposal dict."""
     do_cleanup = clean_unmatched or web_lookup
     parsed = parse_filename(f["parse_hint"])
     if not parsed["title"]:
         if do_cleanup:
-            cleanup = build_local_cleanup(f, root, web_lookup=web_lookup)
+            cleanup = build_local_cleanup(f, root, web_lookup, split, embed_ids)
             if cleanup:
                 return cleanup
         return {
@@ -741,12 +774,12 @@ def build_proposal(f: dict, root: str, api_key: str,
 
     if not match["matched"] or match["confidence"] < 0.3:
         if do_cleanup:
-            cleanup = build_local_cleanup(f, root, web_lookup=web_lookup)
+            cleanup = build_local_cleanup(f, root, web_lookup, split, embed_ids)
             if cleanup:
                 return cleanup
         return {**f, "parsed": parsed, **match, "status": "unmatched"}
 
-    plex_names = build_plex_names(match, f["ext"])
+    plex_names = build_plex_names(match, f["ext"], split, embed_ids)
     proposed_full_path = os.path.join(root, plex_names["folder"], plex_names["filename"])
     status = proposal_status(proposed_full_path, f["full_path"], default="pending")
 
@@ -757,6 +790,7 @@ def build_proposal(f: dict, root: str, api_key: str,
         "proposed_folder": plex_names["folder"],
         "proposed_filename": plex_names["filename"],
         "proposed_full_path": proposed_full_path,
+        "missing_year": not match.get("matched_year"),
         "status": status,
     }
 
@@ -886,11 +920,14 @@ def scan():
 
     clean_unmatched = bool(data.get("clean_unmatched", False))
     web_lookup = bool(data.get("web_lookup", False))
+    split = bool(data.get("split_libraries", False))
+    embed_ids = bool(data.get("embed_ids", False))
     files = scan_directory(root)
     with ThreadPoolExecutor(max_workers=SCAN_CONCURRENCY) as executor:
         # executor.map preserves input order
         proposals = list(executor.map(
-            lambda f: build_proposal(f, root, api_key, clean_unmatched, web_lookup), files
+            lambda f: build_proposal(f, root, api_key, clean_unmatched, web_lookup, split, embed_ids),
+            files,
         ))
     return jsonify({"proposals": proposals, "root": root})
 
@@ -917,6 +954,8 @@ def scan_stream():
 
     clean_unmatched = bool(data.get("clean_unmatched", False))
     web_lookup = bool(data.get("web_lookup", False))
+    split = bool(data.get("split_libraries", False))
+    embed_ids = bool(data.get("embed_ids", False))
     files = scan_directory(root)
 
     def sse(obj: dict) -> str:
@@ -928,7 +967,7 @@ def scan_stream():
         # each proposal as soon as it's ready.
         with ThreadPoolExecutor(max_workers=SCAN_CONCURRENCY) as executor:
             futures = {
-                executor.submit(build_proposal, f, root, api_key, clean_unmatched, web_lookup): i
+                executor.submit(build_proposal, f, root, api_key, clean_unmatched, web_lookup, split, embed_ids): i
                 for i, f in enumerate(files)
             }
             for future in as_completed(futures):
@@ -964,14 +1003,37 @@ def rematch():
     api_key = data.get("tmdb_api_key", "").strip()
     ext = data.get("ext", "")
     parsed = data.get("parsed") or {}
-
-    if not api_key:
-        return jsonify({"error": "TMDB API key is required"}), 400
+    split = bool(data.get("split_libraries", False))
+    embed_ids = bool(data.get("embed_ids", False))
 
     tmdb_id = data.get("tmdb_id")
     media_type = data.get("media_type")
     manual_title = (data.get("manual_title") or "").strip()
     manual_year = data.get("manual_year")
+
+    # "Use as-is" - rebuild a local name (no TMDB) with optional title/year fixes
+    if data.get("local"):
+        f = {
+            "full_path": data.get("full_path", ""),
+            "rel_path": data.get("rel_path", ""),
+            "filename": data.get("filename", ""),
+            "folder": data.get("folder", ""),
+            "parse_hint": Path(data.get("filename", "")).stem,
+            "ext": ext,
+        }
+        year_override = None
+        if manual_year is not None and str(manual_year).strip().isdigit():
+            year_override = int(str(manual_year).strip())
+        cleanup = build_local_cleanup(
+            f, root, web_lookup=False, split=split, embed_ids=embed_ids,
+            title_override=manual_title or None, year_override=year_override,
+        )
+        if not cleanup:
+            return jsonify({"error": "Could not build a name from this file"}), 400
+        return jsonify(cleanup)
+
+    if not api_key:
+        return jsonify({"error": "TMDB API key is required"}), 400
 
     if tmdb_id and media_type:
         details = tmdb_get_details(media_type, tmdb_id, api_key)
@@ -1003,7 +1065,7 @@ def rematch():
     if not match.get("matched"):
         return jsonify({"matched": False, "confidence": 0, "status": "unmatched"})
 
-    plex_names = build_plex_names(match, ext)
+    plex_names = build_plex_names(match, ext, split, embed_ids)
     proposed_full_path = os.path.join(root, plex_names["folder"], plex_names["filename"])
 
     def _norm(p):
@@ -1022,6 +1084,7 @@ def rematch():
         "proposed_folder": plex_names["folder"],
         "proposed_filename": plex_names["filename"],
         "proposed_full_path": proposed_full_path,
+        "missing_year": not match.get("matched_year"),
         "status": status,
     })
 

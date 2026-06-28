@@ -63,20 +63,26 @@ Then open http://localhost:5173 in your browser.
 
 ## Plex naming output
 
-**Films:**
+> **Important:** Plex needs movies and TV in *separate* libraries. A single library mixing both will ignore whichever type doesn't match its agent. With **Separate Movies and TV Shows** enabled (default), output is split into `Movies/` and `TV/` so you can point one Movie-agent library at `Movies/` and one TV-agent library at `TV/`.
+
+**Films** (point a *Movie* library here):
 ```
 Documentaries/
-  Fukushima A Nuclear Nightmare (2026)/
-    Fukushima A Nuclear Nightmare (2026).mkv
+  Movies/
+    Fukushima A Nuclear Nightmare (2026) {tmdb-1234567}/
+      Fukushima A Nuclear Nightmare (2026).mkv
 ```
 
-**TV documentary series:**
+**TV documentary series** (point a *TV Show* library here):
 ```
 Documentaries/
-  Making a Murderer (2015)/
-    Season 01/
-      Making a Murderer (2015) - S01E01 - Plea of Innocence.mkv
+  TV/
+    Making a Murderer (2015) {tmdb-61664}/
+      Season 01/
+        Making a Murderer (2015) - S01E01 - Plea of Innocence.mkv
 ```
+
+The `{tmdb-…}` folder tag is added when **Add TMDB/IMDb IDs to folder names** is on, forcing Plex to match the exact title. Both toggles can be turned off to write a single flat structure without ID tags.
 
 ---
 
@@ -90,6 +96,7 @@ Documentaries/
 - With "Clean names without a TMDB match" enabled, unmatched files still get a best-effort Plex name built from the folder (title/year) and filename (season/episode/episode title). These rows are badged **Local** and are not auto-approved - review them before renaming
 - "Look up unmatched titles on Wikipedia" (no API key needed) refines those names with a canonical title, year, and episode name when a Wikipedia article exists; such rows are badged **Web** with a Wikipedia link. Titles with no Wikipedia article fall back to the **Local** filename cleanup
 - Files already in the correct Plex location are flagged **organised** (hidden by default); a file whose target name is already taken is flagged a **conflict** so the rename never silently fails
+- Rows missing a year are flagged; expand the row and use **Use as-is** to apply a typed title/year (no TMDB needed) - handy for docs not in any database, or just to add a year for better Plex matching
 - Confidence scores: High (85%+), Medium (60-84%), Low (below 60%)
 
 ---

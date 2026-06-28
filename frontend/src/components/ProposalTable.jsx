@@ -22,7 +22,7 @@ function ConfidencePip({ value }) {
   )
 }
 
-function ProposalRow({ proposal, index, onChange, onRemove, root, apiKey }) {
+function ProposalRow({ proposal, index, onChange, onRemove, root, apiKey, split, embedIds }) {
   const [expanded, setExpanded] = useState(false)
   const [manualTitle, setManualTitle] = useState("")
   const [manualYear, setManualYear] = useState("")
@@ -52,6 +52,8 @@ function ProposalRow({ proposal, index, onChange, onRemove, root, apiKey }) {
           folder: proposal.folder,
           ext: proposal.ext,
           parsed: proposal.parsed,
+          split_libraries: split,
+          embed_ids: embedIds,
           ...payload,
         }),
       })
@@ -82,6 +84,41 @@ function ProposalRow({ proposal, index, onChange, onRemove, root, apiKey }) {
   const manualSearch = () => {
     if (!manualTitle.trim()) return
     rematch({ manual_title: manualTitle.trim(), manual_year: manualYear.trim() })
+  }
+
+  // Rebuild the name locally (no TMDB) using the typed title/year. Useful for
+  // docs not in any database, or just to add a missing year for Plex matching.
+  const applyLocal = async () => {
+    setBusy(true)
+    setSearchError(null)
+    try {
+      const res = await fetch(`${API}/api/rematch`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          root_folder: root,
+          full_path: proposal.full_path,
+          rel_path: proposal.rel_path,
+          filename: proposal.filename,
+          folder: proposal.folder,
+          ext: proposal.ext,
+          parsed: proposal.parsed,
+          split_libraries: split,
+          embed_ids: embedIds,
+          local: true,
+          manual_title: manualTitle.trim(),
+          manual_year: manualYear.trim(),
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || "Could not rebuild name")
+      onChange(index, { ...proposal, ...data, selectedAlt: null, approved: true })
+      setExpanded(false)
+    } catch (e) {
+      setSearchError(e.message)
+    } finally {
+      setBusy(false)
+    }
   }
 
   const deleteSource = async () => {
@@ -158,6 +195,11 @@ function ProposalRow({ proposal, index, onChange, onRemove, root, apiKey }) {
               {isCleanup && (
                 <span className="cleanup-label">
                   {isWeb ? "Matched via Wikipedia - no TMDB result" : "Cleaned from filename - no TMDB match"}
+                </span>
+              )}
+              {proposal.missing_year && (
+                <span className="missing-year-label" title="Plex matches best with a year. Expand to add one.">
+                  No year - add one for better Plex matching
                 </span>
               )}
               <span className="proposed-folder">{proposal.proposed_folder}/</span>
@@ -250,7 +292,7 @@ function ProposalRow({ proposal, index, onChange, onRemove, root, apiKey }) {
               )}
 
               <div className="manual-search">
-                <span className="alt-heading">Search manually</span>
+                <span className="alt-heading">Search manually, or use as-is</span>
                 <div className="manual-search-row">
                   <input
                     className="search-input manual-title"
@@ -273,6 +315,14 @@ function ProposalRow({ proposal, index, onChange, onRemove, root, apiKey }) {
                   >
                     {busy ? "Searching..." : "Search"}
                   </button>
+                  <button
+                    className="btn-secondary"
+                    onClick={applyLocal}
+                    disabled={busy}
+                    title="Build the name from your title/year without checking TMDB (good for docs not in any database, or to add a missing year)"
+                  >
+                    Use as-is
+                  </button>
                 </div>
                 {searchError && <span className="field-error">{searchError}</span>}
               </div>
@@ -284,7 +334,7 @@ function ProposalRow({ proposal, index, onChange, onRemove, root, apiKey }) {
   )
 }
 
-export default function ProposalTable({ proposals, onChange, root, apiKey }) {
+export default function ProposalTable({ proposals, onChange, root, apiKey, split, embedIds }) {
   const [filter, setFilter] = useState("all") // all | matched | unmatched
   const [search, setSearch] = useState("")
   const [showOrganised, setShowOrganised] = useState(false)
@@ -390,6 +440,8 @@ export default function ProposalTable({ proposals, onChange, root, apiKey }) {
                 onRemove={removeRow}
                 root={root}
                 apiKey={apiKey}
+                split={split}
+                embedIds={embedIds}
               />
             ))}
           </tbody>

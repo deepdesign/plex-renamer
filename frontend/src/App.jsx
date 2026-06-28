@@ -21,6 +21,8 @@ const DEFAULT_SETTINGS = {
   clean_empty_folders: false,
   clean_unmatched: true,
   web_lookup: true,
+  split_libraries: true,
+  embed_ids: true,
 }
 
 // Statuses the user can approve and rename
@@ -130,6 +132,8 @@ export default function App() {
           tmdb_api_key: settings.tmdb_api_key,
           clean_unmatched: settings.clean_unmatched,
           web_lookup: settings.web_lookup,
+          split_libraries: settings.split_libraries,
+          embed_ids: settings.embed_ids,
         }),
       })
 
@@ -360,6 +364,8 @@ export default function App() {
               onChange={setProposals}
               root={scanRoot}
               apiKey={settings.tmdb_api_key}
+              split={settings.split_libraries}
+              embedIds={settings.embed_ids}
             />
           )}
 
