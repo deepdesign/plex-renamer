@@ -83,6 +83,24 @@ export default function Settings({ settings, onChange, onScan, scanning, stage }
         >
           Get a free key at themoviedb.org →
         </a>
+
+        <label className="field-label" style={{ marginTop: "16px" }}>OMDb API Key <span className="field-optional">(optional)</span></label>
+        <input
+          type="password"
+          className="field-input"
+          placeholder="Enter your OMDb key"
+          value={settings.omdb_api_key || ""}
+          onChange={e => update("omdb_api_key", e.target.value)}
+        />
+        <span className="field-hint">Free IMDb-backed fallback used when TMDB has no match; also adds <code>{"{imdb-…}"}</code> tags</span>
+        <a
+          className="field-hint-link"
+          href="https://www.omdbapi.com/apikey.aspx"
+          target="_blank"
+          rel="noreferrer"
+        >
+          Get a free key at omdbapi.com →
+        </a>
       </div>
 
       <div className="settings-section">

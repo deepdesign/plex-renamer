@@ -23,6 +23,7 @@ const DEFAULT_SETTINGS = {
   web_lookup: true,
   split_libraries: true,
   embed_ids: true,
+  omdb_api_key: "",
 }
 
 // Statuses the user can approve and rename
@@ -134,6 +135,7 @@ export default function App() {
           web_lookup: settings.web_lookup,
           split_libraries: settings.split_libraries,
           embed_ids: settings.embed_ids,
+          omdb_api_key: settings.omdb_api_key,
         }),
       })
 
@@ -364,6 +366,7 @@ export default function App() {
               onChange={setProposals}
               root={scanRoot}
               apiKey={settings.tmdb_api_key}
+              omdbKey={settings.omdb_api_key}
               split={settings.split_libraries}
               embedIds={settings.embed_ids}
             />

@@ -58,6 +58,7 @@ def load_settings():
         "web_lookup": True,
         "split_libraries": True,
         "embed_ids": True,
+        "omdb_api_key": "",
     }
 
 def save_settings(data):
@@ -119,6 +120,23 @@ SAMPLE_PATTERN = re.compile(r"(?:^|[\s._-])sample(?:[\s._-]|$)", re.IGNORECASE)
 # An embedded IMDb rating tag, e.g. "IMDB 8.2" / "imdb8.1"
 IMDB_RATING_PATTERN = re.compile(r"\bimdb\b\s*\d+(?:\.\d+)?", re.IGNORECASE)
 
+# Bracketed scene tags, e.g. "[rartv]", "[RARBG]", "(1080p)"
+BRACKET_TAG_PATTERN = re.compile(r"[\[(][^\])]*[\])]")
+# A trailing scene release group after the final hyphen, e.g. "x264-SHORTBREHD".
+# Only stripped from dot-separated scene names so real titles (e.g. "Spider-Man")
+# survive once their year/extension have been removed.
+SCENE_GROUP_PATTERN = re.compile(r"-[A-Za-z0-9]{2,}$")
+# A trailing country/region tag scene releases add to disambiguate a remake,
+# e.g. "The.Planets.UK.2019" -> "The Planets". Only applied to multi-word titles.
+COUNTRY_SUFFIX_PATTERN = re.compile(r"\s+(?:UK|US|USA|AU|CA|NZ)$", re.IGNORECASE)
+
+
+def strip_scene_group(text: str) -> str:
+    """Drop a trailing dot-separated scene release group (e.g. '-SHORTBREHD')."""
+    if "." in text:
+        return SCENE_GROUP_PATTERN.sub("", text.strip())
+    return text
+
 
 def find_episode_marker(name: str):
     """Return (season, episode, start, end) for the first episode marker, else None."""
@@ -136,6 +154,8 @@ def find_episode_marker(name: str):
 
 def clean_episode_title(text: str) -> str:
     """Tidy the text that follows an episode marker into a usable episode name."""
+    text = BRACKET_TAG_PATTERN.sub(" ", text)
+    text = strip_scene_group(text)  # drop "-GROUP" before NOISE orphans it
     text = IMDB_RATING_PATTERN.sub("", text)
     text = re.sub(r"\(?\b(19[5-9]\d|20[0-3]\d)\b\)?", "", text)  # stray year
     text = NOISE_PATTERN.sub("", text)
@@ -153,6 +173,8 @@ def parse_filename(raw: str) -> dict:
     name = raw
     # Strip file extension if present
     name = re.sub(r"\.[a-z0-9]{2,4}$", "", name, flags=re.IGNORECASE)
+    # Drop bracketed scene tags (e.g. "[rartv]") so they can't leak into titles
+    name = BRACKET_TAG_PATTERN.sub(" ", name)
 
     # Detect episode info, trying the most explicit form first.
     season = episode = None
@@ -190,8 +212,9 @@ def parse_filename(raw: str) -> dict:
     if year_match:
         name = name[: year_match.start()]
 
-    # Strip an embedded IMDb rating tag, then remaining noise
+    # Strip an embedded IMDb rating tag, a trailing scene group, then noise
     name = IMDB_RATING_PATTERN.sub("", name)
+    name = strip_scene_group(name)
     name = NOISE_PATTERN.sub("", name)
 
     # Clean separators: dots, underscores, multiple spaces → single space
@@ -199,6 +222,9 @@ def parse_filename(raw: str) -> dict:
     name = re.sub(r"\s+", " ", name).strip()
     # Remove trailing/leading hyphens and brackets
     name = re.sub(r"^[\s\-\[\]\(\)]+|[\s\-\[\]\(\)]+$", "", name).strip()
+    # Drop a trailing country tag scene releases add (e.g. "The Planets UK")
+    if len(name.split()) >= 2:
+        name = COUNTRY_SUFFIX_PATTERN.sub("", name).strip()
 
     return {
         "title": name,
@@ -499,6 +525,110 @@ def wiki_lookup(title: str, year: int | None, season, episode) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
+# OMDb / IMDb fallback - free key (1000/day). Runs after TMDB; its main wins are
+# an IMDb ID (for the {imdb-...} folder tag) and coverage of obscure titles.
+# ---------------------------------------------------------------------------
+
+OMDB_BASE = "https://www.omdbapi.com/"
+
+
+@lru_cache(maxsize=2048)
+def omdb_by_title(title: str, year, media_type, api_key: str) -> dict | None:
+    """Look up a single best record by title (and optional year/type)."""
+    params = {"apikey": api_key, "t": title}
+    if year:
+        params["y"] = year
+    if media_type:
+        params["type"] = media_type
+    try:
+        r = requests.get(OMDB_BASE, params=params, timeout=10)
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        return data if data.get("Response") == "True" else None
+    except requests.RequestException:
+        return None
+
+
+@lru_cache(maxsize=2048)
+def omdb_episode_title(imdb_id: str, season, episode, api_key: str) -> str | None:
+    """Episode name for a series IMDb id + season/episode."""
+    try:
+        r = requests.get(OMDB_BASE, params={
+            "apikey": api_key, "i": imdb_id, "Season": season, "Episode": episode,
+        }, timeout=10)
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        if data.get("Response") == "True":
+            name = data.get("Title")
+            return name if name and name != "N/A" else None
+    except requests.RequestException:
+        return None
+    return None
+
+
+def omdb_lookup(parsed: dict, api_key: str) -> dict | None:
+    """
+    Search OMDb for `parsed`. Returns a match dict in the same shape as
+    find_best_match (with imdb_id/imdb_url, source='omdb') or None.
+    """
+    from difflib import SequenceMatcher
+
+    if not api_key:
+        return None
+    title = parsed["title"]
+    year = parsed["year"]
+    is_tv = parsed["is_tv"]
+
+    # Prefer the type the filename implies, but fall back to the other / untyped
+    type_order = (["series", "movie", None] if is_tv else ["movie", "series", None])
+    data = None
+    for mt in type_order:
+        data = omdb_by_title(title, year, mt, api_key)
+        if data:
+            break
+    if not data:
+        return None
+
+    cand_title = data.get("Title") or ""
+    cand_year_str = (data.get("Year") or "")[:4]
+    cand_year = int(cand_year_str) if cand_year_str.isdigit() else None
+
+    title_score = SequenceMatcher(None, title.lower(), cand_title.lower()).ratio()
+    year_score = 1.0
+    if year and cand_year:
+        year_score = 1.0 if year == cand_year else (0.7 if abs(year - cand_year) == 1 else 0.3)
+    elif year and not cand_year:
+        year_score = 0.8
+    confidence = round(title_score * 0.7 + year_score * 0.3, 3)
+    if confidence < 0.5:
+        return None
+
+    media_type = "tv" if data.get("Type") == "series" else "movie"
+    imdb_id = data.get("imdbID")
+
+    episode_name = None
+    if media_type == "tv" and parsed.get("season") and parsed.get("episode") and imdb_id:
+        episode_name = omdb_episode_title(imdb_id, parsed["season"], parsed["episode"], api_key)
+
+    return {
+        "matched": True,
+        "confidence": confidence,
+        "type": media_type,
+        "tmdb_id": None,
+        "imdb_id": imdb_id,
+        "matched_title": cand_title,
+        "matched_year": cand_year_str,
+        "episode_name": episode_name,
+        "season": parsed.get("season"),
+        "episode": parsed.get("episode"),
+        "source": "omdb",
+        "imdb_url": f"https://www.imdb.com/title/{imdb_id}/" if imdb_id else None,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Plex naming
 # ---------------------------------------------------------------------------
 
@@ -742,8 +872,9 @@ def build_local_cleanup(f: dict, root: str, web_lookup: bool = False,
 
 def build_proposal(f: dict, root: str, api_key: str,
                    clean_unmatched: bool = False, web_lookup: bool = False,
-                   split: bool = False, embed_ids: bool = False) -> dict:
-    """Match a single scanned file against TMDB and build a proposal dict."""
+                   split: bool = False, embed_ids: bool = False,
+                   omdb_key: str = "") -> dict:
+    """Match a single scanned file against TMDB (then OMDb) and build a proposal."""
     do_cleanup = clean_unmatched or web_lookup
     parsed = parse_filename(f["parse_hint"])
     if not parsed["title"]:
@@ -771,6 +902,15 @@ def build_proposal(f: dict, root: str, api_key: str,
             "status": "error",
             "error": str(e),
         }
+
+    # TMDB missed - try OMDb/IMDb before any local/Wikipedia cleanup
+    if (not match["matched"] or match["confidence"] < 0.3) and omdb_key:
+        try:
+            omdb = omdb_lookup(parsed, omdb_key)
+        except Exception:
+            omdb = None
+        if omdb and omdb["confidence"] >= 0.5:
+            match = omdb
 
     if not match["matched"] or match["confidence"] < 0.3:
         if do_cleanup:
@@ -922,11 +1062,12 @@ def scan():
     web_lookup = bool(data.get("web_lookup", False))
     split = bool(data.get("split_libraries", False))
     embed_ids = bool(data.get("embed_ids", False))
+    omdb_key = data.get("omdb_api_key", "").strip()
     files = scan_directory(root)
     with ThreadPoolExecutor(max_workers=SCAN_CONCURRENCY) as executor:
         # executor.map preserves input order
         proposals = list(executor.map(
-            lambda f: build_proposal(f, root, api_key, clean_unmatched, web_lookup, split, embed_ids),
+            lambda f: build_proposal(f, root, api_key, clean_unmatched, web_lookup, split, embed_ids, omdb_key),
             files,
         ))
     return jsonify({"proposals": proposals, "root": root})
@@ -956,6 +1097,7 @@ def scan_stream():
     web_lookup = bool(data.get("web_lookup", False))
     split = bool(data.get("split_libraries", False))
     embed_ids = bool(data.get("embed_ids", False))
+    omdb_key = data.get("omdb_api_key", "").strip()
     files = scan_directory(root)
 
     def sse(obj: dict) -> str:
@@ -967,7 +1109,7 @@ def scan_stream():
         # each proposal as soon as it's ready.
         with ThreadPoolExecutor(max_workers=SCAN_CONCURRENCY) as executor:
             futures = {
-                executor.submit(build_proposal, f, root, api_key, clean_unmatched, web_lookup, split, embed_ids): i
+                executor.submit(build_proposal, f, root, api_key, clean_unmatched, web_lookup, split, embed_ids, omdb_key): i
                 for i, f in enumerate(files)
             }
             for future in as_completed(futures):
@@ -1058,6 +1200,15 @@ def rematch():
             match = find_best_match(search_parsed, api_key)
         except Exception as e:
             return jsonify({"error": str(e)}), 502
+        # Fall back to OMDb/IMDb if TMDB has no confident manual match
+        omdb_key = data.get("omdb_api_key", "").strip()
+        if (not match.get("matched") or match.get("confidence", 0) < 0.3) and omdb_key:
+            try:
+                omdb = omdb_lookup(search_parsed, omdb_key)
+            except Exception:
+                omdb = None
+            if omdb and omdb["confidence"] >= 0.5:
+                match = omdb
         parsed = search_parsed
     else:
         return jsonify({"error": "Provide either a TMDB id or a manual title"}), 400

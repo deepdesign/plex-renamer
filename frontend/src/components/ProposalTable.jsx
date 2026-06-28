@@ -22,7 +22,7 @@ function ConfidencePip({ value }) {
   )
 }
 
-function ProposalRow({ proposal, index, onChange, onRemove, root, apiKey, split, embedIds }) {
+function ProposalRow({ proposal, index, onChange, onRemove, root, apiKey, omdbKey, split, embedIds }) {
   const [expanded, setExpanded] = useState(false)
   const [manualTitle, setManualTitle] = useState("")
   const [manualYear, setManualYear] = useState("")
@@ -54,6 +54,7 @@ function ProposalRow({ proposal, index, onChange, onRemove, root, apiKey, split,
           parsed: proposal.parsed,
           split_libraries: split,
           embed_ids: embedIds,
+          omdb_api_key: omdbKey,
           ...payload,
         }),
       })
@@ -223,6 +224,10 @@ function ProposalRow({ proposal, index, onChange, onRemove, root, apiKey, split,
             <a href={proposal.tmdb_url} target="_blank" rel="noreferrer" className="tmdb-link">
               TMDB ↗
             </a>
+          ) : proposal.imdb_url ? (
+            <a href={proposal.imdb_url} target="_blank" rel="noreferrer" className="tmdb-link">
+              IMDb ↗
+            </a>
           ) : proposal.wiki_url && (
             <a href={proposal.wiki_url} target="_blank" rel="noreferrer" className="tmdb-link">
               Wiki ↗
@@ -334,7 +339,7 @@ function ProposalRow({ proposal, index, onChange, onRemove, root, apiKey, split,
   )
 }
 
-export default function ProposalTable({ proposals, onChange, root, apiKey, split, embedIds }) {
+export default function ProposalTable({ proposals, onChange, root, apiKey, omdbKey, split, embedIds }) {
   const [filter, setFilter] = useState("all") // all | matched | unmatched
   const [search, setSearch] = useState("")
   const [showOrganised, setShowOrganised] = useState(false)
@@ -440,6 +445,7 @@ export default function ProposalTable({ proposals, onChange, root, apiKey, split
                 onRemove={removeRow}
                 root={root}
                 apiKey={apiKey}
+                omdbKey={omdbKey}
                 split={split}
                 embedIds={embedIds}
               />

@@ -249,6 +249,11 @@ html, body, #root {
   color: var(--text-3);
 }
 
+.field-optional {
+  font-weight: 400;
+  color: var(--text-2);
+}
+
 .field-hint-link {
   font-size: 11px;
   color: var(--amber);
