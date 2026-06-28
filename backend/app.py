@@ -13,12 +13,18 @@ import shutil
 import requests
 import subprocess
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import Flask, request, jsonify, Response, stream_with_context
 from flask_cors import CORS
 
 app = Flask(__name__)
 CORS(app)
+
+# How many files to match against TMDB at once during a scan. TMDB lookups are
+# network-bound, so concurrency dramatically reduces total scan time.
+SCAN_CONCURRENCY = 8
 
 # ---------------------------------------------------------------------------
 # Config
@@ -143,24 +149,28 @@ def parse_filename(raw: str) -> dict:
 # TMDB lookups
 # ---------------------------------------------------------------------------
 
-def tmdb_search_movie(title: str, year: int | None, api_key: str) -> list:
+# Cached so repeated titles (e.g. many episodes of one series) aren't looked up
+# twice. lru_cache is thread-safe, which matters for the concurrent scan.
+@lru_cache(maxsize=2048)
+def tmdb_search_movie(title: str, year: int | None, api_key: str) -> tuple:
     params = {"api_key": api_key, "query": title, "include_adult": False}
     if year:
         params["year"] = year
     r = requests.get(f"{TMDB_BASE}/search/movie", params=params, timeout=10)
     if r.status_code != 200:
-        return []
-    return r.json().get("results", [])
+        return ()
+    return tuple(r.json().get("results", []))
 
 
-def tmdb_search_tv(title: str, year: int | None, api_key: str) -> list:
+@lru_cache(maxsize=2048)
+def tmdb_search_tv(title: str, year: int | None, api_key: str) -> tuple:
     params = {"api_key": api_key, "query": title, "include_adult": False}
     if year:
         params["first_air_date_year"] = year
     r = requests.get(f"{TMDB_BASE}/search/tv", params=params, timeout=10)
     if r.status_code != 200:
-        return []
-    return r.json().get("results", [])
+        return ()
+    return tuple(r.json().get("results", []))
 
 
 def tmdb_episode_name(tv_id: int, season: int, episode: int, api_key: str) -> str | None:
@@ -512,7 +522,9 @@ def scan():
         return jsonify({"error": "TMDB API key is required"}), 400
 
     files = scan_directory(root)
-    proposals = [build_proposal(f, root, api_key) for f in files]
+    with ThreadPoolExecutor(max_workers=SCAN_CONCURRENCY) as executor:
+        # executor.map preserves input order
+        proposals = list(executor.map(lambda f: build_proposal(f, root, api_key), files))
     return jsonify({"proposals": proposals, "root": root})
 
 
@@ -543,15 +555,23 @@ def scan_stream():
 
     def generate():
         yield sse({"type": "start", "total": len(files), "root": root})
-        for i, f in enumerate(files):
-            try:
-                proposal = build_proposal(f, root, api_key)
-            except Exception as e:  # defensive: never break the stream
-                proposal = {
-                    **f, "matched": False, "confidence": 0,
-                    "status": "error", "error": str(e),
-                }
-            yield sse({"type": "proposal", "index": i, "proposal": proposal})
+        # Match files concurrently (TMDB calls are network-bound) and stream
+        # each proposal as soon as it's ready.
+        with ThreadPoolExecutor(max_workers=SCAN_CONCURRENCY) as executor:
+            futures = {
+                executor.submit(build_proposal, f, root, api_key): i
+                for i, f in enumerate(files)
+            }
+            for future in as_completed(futures):
+                i = futures[future]
+                try:
+                    proposal = future.result()
+                except Exception as e:  # defensive: never break the stream
+                    proposal = {
+                        **files[i], "matched": False, "confidence": 0,
+                        "status": "error", "error": str(e),
+                    }
+                yield sse({"type": "proposal", "index": i, "proposal": proposal})
         yield sse({"type": "done"})
 
     return Response(
