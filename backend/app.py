@@ -89,6 +89,7 @@ NOISE_PATTERN = re.compile(
         dts-hd|dts\.hd|                             # audio
         proper|repack|extended|theatrical|           # release flags
         directors\.cut|unrated|remastered|           # release flags
+        bbc|itv|pbs|nhk|natgeo|mvgroup|             # doc networks / release sites
         yify|yts|rarbg|ettv|eztv|               # groups (common)
         [a-z0-9]+-[a-z0-9]+$                        # release group at end
     )\b
@@ -97,7 +98,12 @@ NOISE_PATTERN = re.compile(
 )
 
 YEAR_PATTERN = re.compile(r"\b(19[5-9]\d|20[0-3]\d)\b")
-EPISODE_PATTERN = re.compile(r"[Ss](\d{1,2})[Ee](\d{1,2})")
+
+# Episode markers, in priority order. SxxExx is most explicit; "N of M" and
+# "Part N" / "Episode N" are common in documentary rips (e.g. "2of7").
+SXXEXX_PATTERN = re.compile(r"[Ss](\d{1,2})[Ee](\d{1,2})")
+NOFM_PATTERN = re.compile(r"\b(\d{1,2})\s*of\s*(\d{1,2})\b", re.IGNORECASE)
+PART_PATTERN = re.compile(r"\b(?:part|pt|episode|ep)\s*\.?\s*(\d{1,2})\b", re.IGNORECASE)
 
 
 def parse_filename(raw: str) -> dict:
@@ -109,15 +115,33 @@ def parse_filename(raw: str) -> dict:
     # Strip file extension if present
     name = re.sub(r"\.[a-z0-9]{2,4}$", "", name, flags=re.IGNORECASE)
 
-    # Detect episode info
-    ep_match = EPISODE_PATTERN.search(name)
-    season = int(ep_match.group(1)) if ep_match else None
-    episode = int(ep_match.group(2)) if ep_match else None
-    is_tv = ep_match is not None
+    # Detect episode info, trying the most explicit form first.
+    season = episode = None
+    is_tv = False
+    marker_start = None
 
-    # Remove episode pattern before further parsing
-    if ep_match:
-        name = name[: ep_match.start()]
+    m = SXXEXX_PATTERN.search(name)
+    if m:
+        season, episode = int(m.group(1)), int(m.group(2))
+        is_tv = True
+        marker_start = m.start()
+    else:
+        m = NOFM_PATTERN.search(name)  # e.g. "2of7", "2 of 7"
+        if m:
+            season, episode = 1, int(m.group(1))
+            is_tv = True
+            marker_start = m.start()
+        else:
+            m = PART_PATTERN.search(name)  # e.g. "Part 2", "Episode 2"
+            if m:
+                season, episode = 1, int(m.group(1))
+                is_tv = True
+                marker_start = m.start()
+
+    # Everything from the episode marker onward is series-noise / episode title;
+    # the canonical episode name comes from TMDB.
+    if marker_start is not None:
+        name = name[:marker_start]
 
     # Extract year
     year_match = YEAR_PATTERN.search(name)
